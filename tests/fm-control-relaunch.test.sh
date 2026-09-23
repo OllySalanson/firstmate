@@ -441,7 +441,8 @@ test_direct_spawn_relaunch_is_memory_gated() {
 test_secondmate_relaunch_refuses_the_memory_override() {
   local dir out rc
   dir=$(new_case smoverride sm9)
-  mkdir -p "$dir/home/data/sm9"
+  mkdir -p "$dir/home/data/sm9" "$dir/home/config"
+  printf 'claude\n' > "$dir/home/config/secondmate-harness"
   fm_git_worktree "$dir/proj" "$dir/smhome" sm9-branch
   mkdir -p "$dir/smhome/state" "$dir/smhome/data"
   printf 'sm9\n' > "$dir/smhome/.fm-secondmate-home"

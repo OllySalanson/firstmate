@@ -2392,6 +2392,12 @@ run_script_bounded() {  # <script> <out> <stream> <id>
   local GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM
   # shellcheck source=tests/git-config-helpers.sh
   . "$ROOT/tests/git-config-helpers.sh" || return
+  # The memory gate reads the host's real /proc/meminfo, so a suite's spawns on
+  # a loaded runner would be deferred. tests/lib.sh opts out too, but many
+  # spawn suites never source it; tests/fm-memory-watchdog.test.sh unsets this
+  # and fakes /proc instead.
+  local FM_MEMORY_WATCHDOG_DISABLE=1
+  export FM_MEMORY_WATCHDOG_DISABLE
   local rc
   : "$id"
   set +e
