@@ -63,6 +63,12 @@ unset FM_TASK_ID
 # against an ambient override sets TASKS_AXI_FILE itself.
 unset TASKS_AXI_FILE TASKS_AXI_BACKEND
 
+# The memory gate reads the real machine's /proc/meminfo, so an unrelated suite
+# on a loaded host could see its spawns deferred or start a watchdog loop.
+# Suites opt out here; tests/fm-memory-watchdog.test.sh unsets it and fakes
+# /proc instead.
+export FM_MEMORY_WATCHDOG_DISABLE=1
+
 # Resolve the repo root from this library's own location. Consumed by sourcing
 # test files, not by this library, so it reads as "unused" here.
 # shellcheck disable=SC2034

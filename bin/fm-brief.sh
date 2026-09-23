@@ -126,6 +126,11 @@ esac
 . "$SCRIPT_DIR/fm-dod-lib.sh"
 PAUSED_VERB=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
 CREWMATE_PAUSE_WAIT_EXAMPLES='an upstream release, a rate-limit reset, a scheduled window, or your own validation round'
+# Ship and scout workers share one machine's memory with the rest of the fleet;
+# bin/fm-memory-watchdog.sh stops a ballooning job (docs/configuration.md
+# "Memory gate"), so the brief tells workers how to stay under it.
+MEMORY_RULE='   Keep memory small, because this machine is shared by the whole fleet: run one headless browser at a time, close it between screenshots, use a small viewport (for example 1280x800), and cap test-runner workers (for example --maxWorkers=2).
+   Firstmate'"'"'s memory watchdog stops any single browser tree or test job that grows past its size ceiling (about 1.5 GB for one browser) and tells you through your inbox when it does.'
 
 resolve_directory_input() {
   local name=$1 path=$2 resolved
@@ -476,6 +481,7 @@ The report is the only thing that survives, so anything worth keeping must be in
 1. Never push to any remote and never open a PR.
 2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+$MEMORY_RULE
 4. Report status by appending one line:
    \`$STATUS_APPEND\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
@@ -566,6 +572,7 @@ If the top-level path is the primary checkout or not the worktree you were launc
 $RULE1
 2. Stay inside this worktree; modify nothing outside it.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+$MEMORY_RULE
 4. Report status by appending one line:
    \`$STATUS_APPEND\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.

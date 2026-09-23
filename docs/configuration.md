@@ -455,6 +455,58 @@ This applies only to agents Firstmate launches; the captain's own primary Firstm
 
 Every claude launch's inline `--settings` JSON also carries `"attribution":{"commit":"","pr":"","sessionUrl":false}`, so a spawned worker never writes a Co-Authored-By trailer, Claude-Session link, or generated-with line into a commit or PR body regardless of which settings scopes end up loaded.
 
+## Memory gate (config/memory-gate, config/flagship)
+
+One memory watchdog, [`bin/fm-memory-watchdog.sh`](../bin/fm-memory-watchdog.sh), owns admission of new workers so the machine never runs more work than its memory holds.
+It reads `/proc/meminfo`, so it works on Linux and WSL; on a platform without it, such as macOS, every spawn is admitted with a printed warning rather than blocked.
+"Memory used" is RAM the kernel cannot hand out without swapping (MemTotal minus MemAvailable) as a percentage of MemTotal, and each worker admitted in the last few minutes also counts as reserved memory until its own memory shows up, so a burst of spawns can never be admitted all at once.
+
+The gate closes when counted memory reaches the close line (default 85%), or when swap is nearly exhausted, and reopens only below the reopen line (default 70%).
+A ship or scout spawn is admitted only while the gate is open and one more reserved worker still stays under the close line.
+That includes relaunches (`bin/fm-control.sh <id> relaunch`, or `bin/fm-spawn.sh <id> --relaunch` directly), because recovering from a machine freeze relaunches every task at once; fm-control asks for admission before it stops the old agent.
+Secondmate spawns are not gated.
+
+A spawn the gate refuses prints a `deferred:` line, leaves its backlog item queued, and exits 75; a refused relaunch exits 75 the same way with its old agent, endpoint, and record untouched.
+`--memory-override`, on `bin/fm-spawn.sh` or on `bin/fm-control.sh <id> relaunch`, admits a spawn or relaunch the captain explicitly directed anyway.
+When room frees, the watchdog records a notice that the watcher delivers to firstmate as a `check: memory-watchdog: room for queued work ...` wake naming the deferred work, with a deferred relaunch written as `<id>(relaunch)`, and firstmate dispatches in queue order and relaunches those tasks until one is deferred again.
+`bin/fm-memory-watchdog.sh queue` gives that order: this home's dispatchable queued work with the flagship project's items first, then everything else in the backlog's own order, which is the order the captain asked for it.
+
+When memory in use reaches the critical line (default 95%), the watchdog stops the single largest heavy job - a test runner, a headless browser, or terraform - running under a recorded ship or scout task's local copy.
+It tells that task's worker through `bin/fm-send.sh` what was stopped and why, and reports the stop to firstmate.
+It never stops a worker agent or anything outside a recorded task's process tree, and it waits a short cooldown before stopping another job.
+
+Job ceilings stop a ballooning job early, even while total memory is fine.
+One headless browser tree above its ceiling (default 1.5 GB), or one test-run or terraform job above its ceiling (default 3 GB), is stopped and its worker told why, under the same agent and process-tree limits as the critical line.
+A job's size is the proportional set size (PSS) of its process tree, so pages a multi-process browser or test pool shares are split between its processes rather than counted once per process; a process whose PSS cannot be read counts its resident size instead.
+A browser inside a test run is measured by itself, so only the browser is stopped.
+Every ship and scout worker is launched with `CHROME_DEVTOOLS_AXI_SESSION=fm-<task-id>`, so each drives its own chrome-devtools-axi browser, started from its own local copy, and a ballooning browser is attributed to and stopped for the worker that owns it.
+Ship and scout briefs (`bin/fm-brief.sh`) tell workers to keep one headless browser at a time, close it between screenshots, use a small viewport, and cap test-runner workers.
+
+`config/flagship` is optional, local, and gitignored, and holds one project name matching the backlog's `repo:` field; set it with `bin/fm-memory-watchdog.sh flagship <project>` and clear it with `--clear`.
+It is a per-session choice of this home, so it is not inherited by secondmate homes.
+
+`config/memory-gate` is optional, local, and gitignored; absent means the defaults above.
+It holds `key=value` lines, with `#` comments allowed:
+
+```text
+close=85          # percent counted memory that closes the gate
+reopen=70         # percent counted memory below which a closed gate reopens
+critical=95       # percent memory in use that stops the largest heavy job
+reserve_mb=1024   # memory counted for each just-admitted worker
+reserve_secs=180  # how long a just-admitted worker stays reserved
+browser_ceiling_mb=1536  # one headless browser tree above this is stopped
+job_ceiling_mb=3072      # one test-run or terraform job above this is stopped
+enabled=on        # off admits every spawn and disables the critical stop and the ceilings
+```
+
+Values must satisfy `reopen < close < critical <= 100`.
+A malformed file makes every spawn refuse with the reason, while the watchdog loop keeps protecting on the defaults and reports the problem once.
+
+`bin/fm-memory-watchdog.sh status` prints the gate, memory in use, reservations, the lines, the job ceilings, the flagship, deferred work, whether the watchdog loop is running, and its recent events.
+The gate records are machine-wide, kept in the local root home's `state/`, so every home on one machine shares one gate; deferred work and events stay in each home.
+The watchdog's detached loop is started and kept alive by the watcher and by each spawn, ticks every few seconds so it keeps protecting while the watcher waits for firstmate's next turn, and exits by itself once the home has no task records and no deferred work.
+The script's header owns the exact commands, records, and tuning variables.
+
 ## Crew dispatch profiles (config/crew-dispatch.json)
 
 `config/crew-dispatch.json` is an optional local, gitignored file containing natural-language rules that firstmate reads before dispatching a crewmate or scout.
@@ -1126,6 +1178,11 @@ FM_TASKS_AXI_COMPATIBLE=   # internal one-hop handoff of an already-computed tas
 FM_GUARD_READ_ONLY=0    # internal/read-only guard mode: keep alarms but suppress drain, supervision repair, and checkout repair commands
 FM_GUARD_CONTINUE_LINE='This is a supervision warning only; the guarded operation WILL still run.'   # banner continuation line; fm-send.sh overrides it to name the requested message specifically
 FM_POLL=15              # seconds between watcher poll cycles
+FM_MEMORY_WATCHDOG_POLL=3        # seconds between memory watchdog loop ticks (bin/fm-memory-watchdog.sh)
+FM_MEMORY_WATCHDOG_IDLE_EXIT=60  # seconds the memory watchdog loop keeps running after its home has no task records and no deferred work
+FM_MEMORY_CRITICAL_COOLDOWN=20   # seconds after one critical-line job stop before the watchdog may stop another, machine-wide
+FM_MEMORY_ROOM_RENOTIFY=600      # seconds between repeated room notices while work stays deferred
+FM_MEMORY_WATCHDOG_DISABLE=0     # 1 turns the memory gate and watchdog off entirely; the behavior-test library sets it for unrelated suites
 FM_HOME_SUMMARY_INTERVAL=300   # seconds before a live watcher refreshes this home's state/home-summary.json even without a status signal; invalid or zero values use 300
 FM_HOME_SUMMARY_TIMEOUT=60     # seconds bounding the complete best-effort home-summary refresh, including lock acquisition, validation, atomic publication, and worker-side failure logging; invalid or zero values use 60
 FM_HOME_SUMMARY_ERROR_LOG_MAX_BYTES=65536   # approximate size cap for state/.home-summary-refresh.log before it is trimmed to the newest 200 lines; invalid or zero values use 65536

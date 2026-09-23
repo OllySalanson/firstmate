@@ -2299,6 +2299,22 @@ test_self_held_lock_reclaims_instead_of_deadlocking() {
   pass "an abandoned same-process lock hold is reclaimed; a parent's live hold is not"
 }
 
+test_lock_in_a_missing_directory_refuses_promptly() {
+  local dir rc
+  dir=$(make_case missing-lock-dir)
+  rc=0
+  # shellcheck disable=SC2016 # Positional parameters expand in the child shell.
+  FM_STATE_OVERRIDE="$dir/state" timeout 10 bash -c '
+    . "$1"
+    fm_lock_try_acquire "$2/gone/.fixture.lock" && exit 10
+    [ ! -e "$2/gone" ] || exit 11
+    exit 0
+  ' _ "$ROOT/bin/fm-wake-lib.sh" "$dir" || rc=$?
+  [ "$rc" -ne 124 ] || fail "a lock in a missing directory recursed instead of refusing"
+  [ "$rc" -eq 0 ] || fail "a lock in a missing directory was not refused cleanly (rc=$rc)"
+  pass "a lock whose directory is gone is refused at once instead of recursing on .steal names"
+}
+
 test_subshell_lock_ownership_without_bashpid() {
   local dir state rc
   dir=$(make_case subshell-lock-ownership)
@@ -2691,6 +2707,7 @@ test_wake_queue_prune_task() {
 }
 
 test_self_held_lock_reclaims_instead_of_deadlocking
+test_lock_in_a_missing_directory_refuses_promptly
 test_subshell_lock_ownership_without_bashpid
 test_bounded_lock_handoff_after_contention
 test_live_presentation_holder_is_deadlined_without_weakening_ack

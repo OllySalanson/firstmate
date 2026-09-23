@@ -939,6 +939,12 @@ fm_lock_try_acquire() {
   if fm_lock_try_create "$lockdir"; then
     return 0
   fi
+  # A lock whose directory is gone can be neither held nor created. Refuse it
+  # here: the stale-owner recovery below would otherwise recurse forever on
+  # ever-longer .steal names that can never be created either.
+  case "$lockdir" in
+    */*) [ -d "${lockdir%/*}/" ] || return 1 ;;
+  esac
 
   fm_current_pid current || return 1
   pid=$(cat "$lockdir/pid" 2>/dev/null || true)
