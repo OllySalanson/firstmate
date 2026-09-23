@@ -63,7 +63,8 @@ FM_MEMORY_DEFERRED_EXIT=75
 
 # fm_memory_load_config <config-dir>
 # Sets FM_MEMORY_ENABLED (1/0), FM_MEMORY_CLOSE, FM_MEMORY_REOPEN,
-# FM_MEMORY_CRITICAL, FM_MEMORY_RESERVE_MB, FM_MEMORY_RESERVE_SECS.
+# FM_MEMORY_CRITICAL, FM_MEMORY_RESERVE_MB, FM_MEMORY_RESERVE_SECS,
+# FM_MEMORY_BROWSER_CEILING_MB, FM_MEMORY_JOB_CEILING_MB.
 # Returns 1 with FM_MEMORY_CONFIG_ERROR set for a malformed config/memory-gate;
 # the defaults stay loaded so a caller that must keep protecting can use them.
 fm_memory_load_config() {
