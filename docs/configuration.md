@@ -455,6 +455,48 @@ This applies only to agents Firstmate launches; the captain's own primary Firstm
 
 Every claude launch's inline `--settings` JSON also carries `"attribution":{"commit":"","pr":"","sessionUrl":false}`, so a spawned worker never writes a Co-Authored-By trailer, Claude-Session link, or generated-with line into a commit or PR body regardless of which settings scopes end up loaded.
 
+## Memory gate (config/memory-gate, config/flagship)
+
+One memory watchdog, [`bin/fm-memory-watchdog.sh`](../bin/fm-memory-watchdog.sh), owns admission of new workers so the machine never runs more work than its memory holds.
+It reads `/proc/meminfo`, so it works on Linux and WSL; on a platform without it, such as macOS, every spawn is admitted with a printed warning rather than blocked.
+"Memory used" is RAM the kernel cannot hand out without swapping (MemTotal minus MemAvailable) as a percentage of MemTotal, and each worker admitted in the last few minutes also counts as reserved memory until its own memory shows up, so a burst of spawns can never be admitted all at once.
+
+The gate closes when counted memory reaches the close line (default 85%), or when swap is nearly exhausted, and reopens only below the reopen line (default 70%).
+A fresh ship or scout spawn is admitted only while the gate is open and one more reserved worker still stays under the close line.
+Relaunches and secondmate spawns are not gated.
+
+A spawn the gate refuses prints a `deferred:` line, leaves its backlog item queued, and exits 75.
+`--memory-override` admits a spawn the captain explicitly directed anyway.
+When room frees, the watchdog records a notice that the watcher delivers to firstmate as a `check: memory-watchdog: room for queued work ...` wake, and firstmate dispatches in queue order until a spawn is deferred again.
+`bin/fm-memory-watchdog.sh queue` gives that order: this home's dispatchable queued work with the flagship project's items first, then everything else in the backlog's own order, which is the order the captain asked for it.
+
+When memory in use reaches the critical line (default 95%), the watchdog stops the single largest heavy job - a test runner, a headless browser, or terraform - running under a recorded ship or scout task's local copy.
+It tells that task's worker through `bin/fm-send.sh` what was stopped and why, and reports the stop to firstmate.
+It never stops a worker agent or anything outside a recorded task's process tree, and it waits a short cooldown before stopping another job.
+
+`config/flagship` is optional, local, and gitignored, and holds one project name matching the backlog's `repo:` field; set it with `bin/fm-memory-watchdog.sh flagship <project>` and clear it with `--clear`.
+It is a per-session choice of this home, so it is not inherited by secondmate homes.
+
+`config/memory-gate` is optional, local, and gitignored; absent means the defaults above.
+It holds `key=value` lines, with `#` comments allowed:
+
+```text
+close=85          # percent counted memory that closes the gate
+reopen=70         # percent counted memory below which a closed gate reopens
+critical=95       # percent memory in use that stops the largest heavy job
+reserve_mb=1024   # memory counted for each just-admitted worker
+reserve_secs=180  # how long a just-admitted worker stays reserved
+enabled=on        # off admits every spawn and disables the critical stop
+```
+
+Values must satisfy `reopen < close < critical <= 100`.
+A malformed file makes every spawn refuse with the reason, while the watchdog loop keeps protecting on the defaults and reports the problem once.
+
+`bin/fm-memory-watchdog.sh status` prints the gate, memory in use, reservations, the lines, the flagship, deferred work, whether the watchdog loop is running, and its recent events.
+The gate records are machine-wide, kept in the local root home's `state/`, so every home on one machine shares one gate; deferred work and events stay in each home.
+The watchdog's detached loop is started and kept alive by the watcher and by each spawn, ticks every few seconds so it keeps protecting while the watcher waits for firstmate's next turn, and exits by itself once the home has no task records and no deferred work.
+The script's header owns the exact commands, records, and tuning variables.
+
 ## Crew dispatch profiles (config/crew-dispatch.json)
 
 `config/crew-dispatch.json` is an optional local, gitignored file containing natural-language rules that firstmate reads before dispatching a crewmate or scout.
@@ -1126,6 +1168,11 @@ FM_TASKS_AXI_COMPATIBLE=   # internal one-hop handoff of an already-computed tas
 FM_GUARD_READ_ONLY=0    # internal/read-only guard mode: keep alarms but suppress drain, supervision repair, and checkout repair commands
 FM_GUARD_CONTINUE_LINE='This is a supervision warning only; the guarded operation WILL still run.'   # banner continuation line; fm-send.sh overrides it to name the requested message specifically
 FM_POLL=15              # seconds between watcher poll cycles
+FM_MEMORY_WATCHDOG_POLL=3        # seconds between memory watchdog loop ticks (bin/fm-memory-watchdog.sh)
+FM_MEMORY_WATCHDOG_IDLE_EXIT=60  # seconds the memory watchdog loop keeps running after its home has no task records and no deferred work
+FM_MEMORY_CRITICAL_COOLDOWN=20   # seconds after one critical-line job stop before the watchdog may stop another, machine-wide
+FM_MEMORY_ROOM_RENOTIFY=600      # seconds between repeated room notices while work stays deferred
+FM_MEMORY_WATCHDOG_DISABLE=0     # 1 turns the memory gate and watchdog off entirely; the behavior-test library sets it for unrelated suites
 FM_HOME_SUMMARY_INTERVAL=300   # seconds before a live watcher refreshes this home's state/home-summary.json even without a status signal; invalid or zero values use 300
 FM_HOME_SUMMARY_TIMEOUT=60     # seconds bounding the complete best-effort home-summary refresh, including lock acquisition, validation, atomic publication, and worker-side failure logging; invalid or zero values use 60
 FM_HOME_SUMMARY_ERROR_LOG_MAX_BYTES=65536   # approximate size cap for state/.home-summary-refresh.log before it is trimmed to the newest 200 lines; invalid or zero values use 65536

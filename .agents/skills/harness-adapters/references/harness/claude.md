@@ -55,6 +55,7 @@ Styled capture stays internal to the boolean detector; `fm-peek` and model-facin
 
 The spawn disables Claude's `/bug` and `/feedback` model-drafted feedback flow for every Claude worker and secondmate, preventing a fleet-launched agent from queuing or submitting a bug report on the captain's behalf.
 The controls are scoped to the launched process and never modify the captain's global Claude settings; `launch_template()` in `../../../../../bin/fm-spawn.sh` owns their exact mechanics and defense-in-depth rationale.
+The same per-launch settings deny the account-synced PDF viewer plugin's MCP server (`plugin:pdf-viewer:pdf`), so no launched agent starts its roughly 0.2 GB helper; the captain's own sessions keep it, and `launch_template()` records the verified Claude Code version.
 
 ## Task control channel
 

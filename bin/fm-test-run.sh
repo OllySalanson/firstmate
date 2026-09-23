@@ -369,7 +369,7 @@ family_for_basename() {
     fm-tmux-agent-liveness.test.sh|\
     fm-control.test.sh|fm-control-relaunch.test.sh|\
     fm-herdr-session-cleanup.test.sh|fm-send-resolve-key.test.sh|fm-send-strict.test.sh|\
-    fm-send-inbox.test.sh|fm-spawn-batch.test.sh|\
+    fm-send-inbox.test.sh|fm-spawn-batch.test.sh|fm-memory-watchdog.test.sh|\
     fm-spawn-dispatch-profile.test.sh|fm-claude-trust.test.sh|\
     fm-trace-context-spawn.test.sh|fm-spawn-worktree-settle.test.sh|\
     fm-spawn-compact-adviser-disable.test.sh|\
@@ -744,6 +744,7 @@ tests/fm-lint-workflows.test.sh 785
 tests/fm-live-gate.test.sh 1755
 tests/fm-mail-check.test.sh 9162
 tests/fm-mail.test.sh 9703
+tests/fm-memory-watchdog.test.sh 16000
 tests/fm-muse-harness.test.sh 40970
 tests/fm-muse-signals-live-e2e.test.sh 77
 tests/fm-nm-test-contract.test.sh 128
@@ -1556,6 +1557,11 @@ families_for_changed_path() {
     bin/fm-peek.sh|bin/fm-composer*)
       printf '%s\n' backend-dispatch
       printf '%s\n' pure-contract-unit
+      ;;
+    bin/fm-memory-lib.sh|bin/fm-memory-watchdog.sh)
+      # The memory gate: spawn admission, the watcher's per-cycle poll, and
+      # the detached watchdog loop, all pinned by its own suite.
+      printf '%s\n' "__script__:fm-memory-watchdog.test.sh"
       ;;
     bin/fm-task-inbox-lib.sh)
       # The steering-inbox record/doorbell/ladder owner: fm-send's data plane
