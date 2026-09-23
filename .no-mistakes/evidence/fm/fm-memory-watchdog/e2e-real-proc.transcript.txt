@@ -1,0 +1,49 @@
+$ ps (before tick)
+    PID   RSS COMMAND
+2935355 419944 headless_shell -c import time; b=bytearray(400*1024*1024); b[::4096]=b"x"*len(b[::4096]); time.sleep(600) --headless
+2935356 61432 headless_shell -c import time; b=bytearray(50*1024*1024); b[::4096]=b"x"*len(b[::4096]); time.sleep(600) --headless
+
+$ fm-memory-watchdog.sh status
+memory gate: open - 39% of 10.7 GB RAM in use, swap 0.0/4.0 GB used; 0 just-started worker(s) reserved, counted 39%
+room: yes - a new worker would be admitted now
+lines: closes at 85%, reopens below 70%, critical stop at 95%; each new worker reserves 1024 MB for 180s
+job ceilings: one headless browser tree 200 MB, one test or terraform job 3072 MB
+flagship: none (set with bin/fm-memory-watchdog.sh flagship <project>)
+deferred work: none
+watchdog loop: not running (started by the watcher or the next spawn while work exists)
+
+$ fm-memory-watchdog.sh tick
+(exit 0)
+
+$ ps (after tick)
+    PID   RSS COMMAND
+2935356 61432 headless_shell -c import time; b=bytearray(50*1024*1024); b[::4096]=b"x"*len(b[::4096]); time.sleep(600) --headless
+OK: ballooning browser (2935355) stopped
+OK: small browser (2935356) under ceiling left running
+
+$ worker notice sent:
+NOTICE to e2e1: Memory watchdog: your headless browser grew to about 0.4 GB PSS ('headless_shell -c import time; b=bytearray(400*1024*1024); b[::4096]=b"x"*len(b[', process 2935355 and its children, shared pages split between them), past the 0.2 GB ceiling for one browser, so I stopped it before it could freeze the machine. Nothing else of yours was touched. Keep one headless browser at a time, close it between screenshots, and use a small viewport (for example 1280x800), then carry on.
+
+$ fm-memory-watchdog.sh poll   (what firstmate's watcher surfaces)
+memory-watchdog: job ceiling: stopped e2e1's headless browser 'headless_shell -c import time; b=bytearray(400*1024*1024); b[::4096]=b"x"*len(b[' at about 0.4 GB PSS (ceiling 0.2 GB) and told its worker
+
+--- admission against real meminfo ---
+$ admit w1
+(exit 0)
+$ admit w2 with close line forced to 2%
+deferred: w2 stays queued - the memory gate is closed (36% of RAM in use, 1 just-started worker(s) reserved, counted 46%; it closed at 2% and reopens below 1%). The memory watchdog notifies firstmate when room frees; bin/fm-memory-watchdog.sh status shows the gate. Pass --memory-override only for a spawn the captain explicitly directed.
+(exit 75)
+$ admit w3 --override
+memory gate: admitting w3 by explicit override although 46% is counted (closes at 2%)
+(exit 0)
+
+$ status
+memory gate: closed - 36% of 10.7 GB RAM in use, swap 0.0/4.0 GB used; 2 just-started worker(s) reserved, counted 56%
+room: no - a new worker would be deferred and started when memory frees
+lines: closes at 2%, reopens below 1%, critical stop at 99%; each new worker reserves 1024 MB for 180s
+job ceilings: one headless browser tree 1536 MB, one test or terraform job 3072 MB
+flagship: none (set with bin/fm-memory-watchdog.sh flagship <project>)
+deferred work: w2
+watchdog loop: running (pid 2935343, every 3s)
+recent events:
+  2026-09-23 23:42  job ceiling: stopped e2e1's headless browser 'headless_shell -c import time; b=bytearray(400*1024*1024); b[::4096]=b"x"*len(b[' at about 0.4 GB PSS (ceiling 0.2 GB) and told its worker

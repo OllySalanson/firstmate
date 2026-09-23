@@ -1,0 +1,21 @@
+ok - just-admitted workers count as reserved memory, so a burst is admitted only while it fits
+ok - a reservation stops counting after reserve_secs
+ok - the gate closes at 85% and reopens only below 70%
+ok - nearly exhausted swap closes the gate even with RAM to spare
+ok - --override admits a captain-directed worker and still counts it
+ok - without /proc/meminfo the gate admits with a warning instead of blocking
+ok - config/memory-gate is validated, tunable, and can switch the gate off
+ok - the critical line stops only the single largest heavy job in a task's tree and tells its worker
+ok - a heavy job whose subtree contains a worker agent is never stopped
+ok - a critical episode with nothing stoppable is reported once per episode
+ok - one browser tree over its ceiling is stopped early, alone, even while total memory is fine
+ok - one test run over the configured job ceiling is stopped and its worker told
+ok - freed memory announces deferred work once, and admission clears it
+ok - the dispatch queue puts the flagship project first, then keeps request order
+ok - the watchdog loop is a singleton that runs only while the home has work
+ok - fm-spawn defers a fresh spawn over the gate, admits it on --memory-override, and refuses the override for a secondmate
+ok - a deferred relaunch is announced as one when room frees and dropped when its task is torn down
+ok - a job is sized by summed PSS, falling back to RSS where PSS is unreadable
+ok - a held gate lock postpones only the gate update, never the job stops
+ok - trimming surfaced events keeps every later event for the next poll
+# all fm-memory-watchdog tests passed
