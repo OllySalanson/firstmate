@@ -5,7 +5,7 @@
 # Usage: fm-control.sh <task-id> interrupt
 #        fm-control.sh <task-id> exit
 #        fm-control.sh <task-id> relaunch [--harness <name>] [--model <name>]
-#                                         [--effort <level>]
+#                                         [--effort <level>] [--memory-override]
 #                                         (--note <text> | --note-file <path>)
 #
 # Why this exists, and how it differs from fm-send.sh. bin/fm-send.sh is the
@@ -76,9 +76,17 @@
 #              inherits the local copy but none of the conversation; a
 #              secondmate reconciles its own home's records at startup, so its
 #              standing charter is never rewritten.
+#              A ship or scout relaunch asks the memory gate for admission
+#              (bin/fm-memory-watchdog.sh admit --relaunch) after the checkpoint
+#              is proven and before anything is recorded or stopped; a deferral
+#              prints the gate's `deferred: ...` line and exits 75 with the old
+#              agent, endpoint, and record untouched. --memory-override admits a
+#              relaunch the captain explicitly directed regardless of the gate;
+#              it is refused for a secondmate, which is never memory-gated.
 #              Records a durable checkpoint and that note, exits the old agent,
 #              then delegates the launch to its single owner,
-#              bin/fm-spawn.sh --relaunch. A failure before publication keeps
+#              bin/fm-spawn.sh --relaunch, handing the admission over as
+#              FM_MEMORY_ADMITTED=<task-id> so it is not reserved twice. A failure before publication keeps
 #              the prior durable record in place and reports the concrete
 #              state; it never leaves a half-transitioned task claiming to be
 #              running.
@@ -232,6 +240,7 @@ MODEL_SET=0
 EFFORT_SET=0
 NOTE=
 NOTE_SET=0
+MEMORY_OVERRIDE=0
 control_want_value=
 for control_arg in "$@"; do
   if [ -n "$control_want_value" ]; then
@@ -262,6 +271,7 @@ for control_arg in "$@"; do
     --note) control_want_value=note ;;
     --note=*) NOTE=${control_arg#--note=}; NOTE_SET=1 ;;
     --note-file) control_want_value=note_file ;;
+    --memory-override) MEMORY_OVERRIDE=1 ;;
     --note-file=*)
       [ -f "${control_arg#--note-file=}" ] || die "--note-file '${control_arg#--note-file=}' is not a readable file"
       NOTE=$(cat "${control_arg#--note-file=}")
@@ -277,7 +287,8 @@ fi
 
 if [ "$VERB" != relaunch ]; then
   [ "$HARNESS_SET" = 0 ] && [ "$MODEL_SET" = 0 ] && [ "$EFFORT_SET" = 0 ] && [ "$NOTE_SET" = 0 ] \
-    || die "--harness, --model, --effort, and --note apply to 'relaunch' only"
+    && [ "$MEMORY_OVERRIDE" = 0 ] \
+    || die "--harness, --model, --effort, --note, and --memory-override apply to 'relaunch' only"
 fi
 [ "$HARNESS_SET" = 0 ] || [ -n "$NEW_HARNESS" ] || die "--harness requires a non-empty value"
 [ "$MODEL_SET" = 0 ] || [ -n "$NEW_MODEL" ] || die "--model requires a non-empty value"
@@ -946,6 +957,21 @@ record_note() {
   esac
 }
 
+# relaunch_memory_admit: the memory gate's admission for a ship or scout
+# replacement, taken before the old agent is stopped so a deferral changes
+# nothing (header).
+relaunch_memory_admit() {
+  local rc=0
+  local -a admit_args=("$ID" --relaunch)
+  [ "$MEMORY_OVERRIDE" = 0 ] || admit_args+=(--override)
+  FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-memory-watchdog.sh" admit "${admit_args[@]}" || rc=$?
+  case "$rc" in
+    0) ;;
+    75) exit 75 ;;
+    *) die "the memory gate could not decide admission for relaunching $ID; fix the reported problem, or pass --memory-override for a relaunch the captain explicitly directed" ;;
+  esac
+}
+
 do_relaunch() {
   local exit_result state note_line
   local -a spawn_args
@@ -965,6 +991,8 @@ do_relaunch() {
       # The charter in the secondmate's own home is its instruction source and
       # stays untouched.
       RELAUNCH_BRIEF=
+      [ "$MEMORY_OVERRIDE" = 0 ] \
+        || die "--memory-override applies only to ship and scout relaunches; a secondmate relaunch is not memory-gated"
       ;;
     *)
       die "task $ID records kind '$KIND', which has no defined relaunch shape"
@@ -977,6 +1005,7 @@ do_relaunch() {
     note_line="note=none"
   fi
   safe_checkpoint
+  [ "$KIND" = secondmate ] || relaunch_memory_admit
   cp -p "$META" "$META_PRIOR" || die "could not preserve task $ID's durable record before relaunching"
   RELAUNCH_ACTIVE=1
   journal_write checkpoint "${CHECKPOINT_LINES[@]}" "$note_line"
@@ -995,7 +1024,7 @@ do_relaunch() {
   spawn_args=("$ID" --relaunch --harness "$TARGET_HARNESS")
   [ "$TARGET_MODEL" = default ] || spawn_args+=(--model "$TARGET_MODEL")
   [ "$TARGET_EFFORT" = default ] || spawn_args+=(--effort "$TARGET_EFFORT")
-  if FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
+  if FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" FM_MEMORY_ADMITTED="$ID" \
       "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" >/dev/null; then
     RELAUNCH_META_PUBLISHED=1
     # $T was resolved from the record before the launch. When the recorded

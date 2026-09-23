@@ -362,6 +362,109 @@ SH
 
 # --- 1. same-harness relaunch -----------------------------------------------
 
+# memory_gate <case-dir> <used-percent>: a fake 10 GB /proc/meminfo, with this
+# shell standing in as the home's watchdog loop so no real loop starts.
+memory_gate() {
+  local dir=$1 total=$((10 * 1048576))
+  mkdir -p "$dir/proc" "$dir/home/state/.memory-watchdog.lock"
+  printf '%s\n' "$$" > "$dir/home/state/.memory-watchdog.lock/pid"
+  printf 'MemTotal: %s kB\nMemAvailable: %s kB\n' "$total" $((total - total * $2 / 100)) > "$dir/proc/meminfo"
+}
+
+gated() {  # <case-dir> <run_control|run_spawn> <args...>: run with the gate on
+  local dir=$1 runner=$2
+  shift 2
+  FM_MEMORY_WATCHDOG_DISABLE=0 FM_MEMORY_PROC_ROOT="$dir/proc" FM_STATE_OVERRIDE="$dir/home/state" \
+    "$runner" "$dir" "$@"
+}
+
+reservations() {  # <case-dir>: reservation lines recorded
+  if [ -f "$1/home/state/.memory-reservations" ]; then
+    wc -l < "$1/home/state/.memory-reservations" | tr -d '[:space:]'
+  else
+    printf '0'
+  fi
+}
+
+test_relaunch_deferred_by_the_memory_gate_changes_nothing() {
+  local dir out rc meta_before brief_before
+  dir=$(new_case memdefer rl50)
+  add_ship_task "$dir" rl50 claude
+  memory_gate "$dir" 92
+  meta_before=$(cat "$dir/home/state/rl50.meta")
+  brief_before=$(cat "$dir/home/data/rl50/brief.md")
+  out=$(gated "$dir" run_control rl50 relaunch --note "recovering after a freeze"); rc=$?
+  expect_code 75 "$rc" "a relaunch over the memory gate should defer"$'\n'"$out"
+  assert_contains "$out" "deferred: rl50" "the deferral should print the gate's reason"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "a deferred relaunch must not stop the old agent"
+  [ -z "$(cat "$dir/fake/literal")" ] || fail "a deferred relaunch must send nothing to the endpoint"
+  assert_equals "$meta_before" "$(cat "$dir/home/state/rl50.meta")" "a deferred relaunch must leave the record untouched"
+  assert_equals "$brief_before" "$(cat "$dir/home/data/rl50/brief.md")" "a deferred relaunch must leave the instructions untouched"
+  assert_absent "$dir/home/state/rl50.control-relaunch" "a deferred relaunch must not open a transaction"
+  pass "fm-control relaunch: a ship relaunch the memory gate defers exits 75 before the agent is touched"
+}
+
+test_gated_relaunch_reserves_its_worker_once() {
+  local dir out rc
+  dir=$(new_case memroom rl51)
+  add_ship_task "$dir" rl51 claude
+  memory_gate "$dir" 40
+  out=$(gated "$dir" run_control rl51 relaunch --note "recovering"); rc=$?
+  expect_code 0 "$rc" "a relaunch with room should proceed"$'\n'"$out"
+  assert_equals 1 "$(reservations "$dir")" "the relaunch should reserve its worker exactly once across fm-control and fm-spawn"
+  dir=$(new_case memoverride rl53)
+  add_ship_task "$dir" rl53 claude
+  memory_gate "$dir" 92
+  out=$(gated "$dir" run_control rl53 relaunch --note "captain directed" --memory-override); rc=$?
+  expect_code 0 "$rc" "an overridden relaunch should proceed over the gate"$'\n'"$out"
+  assert_equals 1 "$(reservations "$dir")" "an overridden relaunch should still reserve its worker once"
+  pass "fm-control relaunch: admission is taken once, before the stop, and --memory-override bypasses the gate"
+}
+
+test_direct_spawn_relaunch_is_memory_gated() {
+  local dir out rc meta_before
+  dir=$(new_case memspawn rl52)
+  add_ship_task "$dir" rl52 claude
+  printf 'zsh' > "$dir/fake/command"
+  memory_gate "$dir" 92
+  meta_before=$(cat "$dir/home/state/rl52.meta")
+  out=$(gated "$dir" run_spawn rl52 --relaunch); rc=$?
+  expect_code 75 "$rc" "a direct fm-spawn --relaunch over the gate should defer"$'\n'"$out"
+  assert_equals "$meta_before" "$(cat "$dir/home/state/rl52.meta")" "a deferred relaunch must leave the record untouched"
+  assert_no_grep "encode launch-brief" "$dir/fake/literal" "a deferred relaunch must launch nothing"
+  out=$(gated "$dir" run_spawn rl52 --relaunch --memory-override); rc=$?
+  expect_code 0 "$rc" "an overridden direct relaunch should launch"$'\n'"$out"
+  assert_contains "$out" "spawned rl52" "the overridden relaunch should launch its replacement"
+  pass "fm-spawn --relaunch: a direct ship relaunch is memory-gated and honors --memory-override"
+}
+
+test_secondmate_relaunch_refuses_the_memory_override() {
+  local dir out rc
+  dir=$(new_case smoverride sm9)
+  mkdir -p "$dir/home/data/sm9"
+  fm_git_worktree "$dir/proj" "$dir/smhome" sm9-branch
+  mkdir -p "$dir/smhome/state" "$dir/smhome/data"
+  printf 'sm9\n' > "$dir/smhome/.fm-secondmate-home"
+  {
+    echo "window=fmses:fm-sm9"
+    echo "endpoint_task_id=sm9"
+    echo "worktree=$dir/smhome"
+    echo "project=$dir/smhome"
+    echo "harness=claude"
+    echo "kind=secondmate"
+    echo "mode=secondmate"
+    echo "yolo=off"
+    echo "home=$dir/smhome"
+  } > "$dir/home/state/sm9.meta"
+  printf '%s\n' "fm-sm9" > "$dir/fake/windows"
+  printf '%s' "$dir/smhome" > "$dir/fake/cwd"
+  out=$(run_control "$dir" sm9 relaunch --memory-override); rc=$?
+  expect_code 1 "$rc" "a secondmate relaunch should refuse the memory override"
+  assert_contains "$out" "a secondmate relaunch is not memory-gated" "the refusal should say why"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "the refusal must not stop the secondmate"
+  pass "fm-control relaunch: --memory-override is refused for a secondmate, which is never gated"
+}
+
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint() {
   local dir out rc gen_before gen_after
   dir=$(new_case same rl1)
@@ -2253,6 +2356,10 @@ test_relaunch_moves_a_drifted_item_back_in_flight() {
 }
 
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
+test_relaunch_deferred_by_the_memory_gate_changes_nothing
+test_gated_relaunch_reserves_its_worker_once
+test_direct_spawn_relaunch_is_memory_gated
+test_secondmate_relaunch_refuses_the_memory_override
 test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven
 test_relaunch_from_linked_home_preserves_recorded_worktree

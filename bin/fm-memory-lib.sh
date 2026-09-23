@@ -38,8 +38,15 @@
 # browser (chrome, chromium, headless_shell, msedge), or terraform, whose
 # working directory is inside a recorded ship or scout task worktree, and
 # whose parent is not itself heavy (so a job is its topmost heavy process).
-# Its size is the RSS of its whole process subtree, browser renderers
-# included. Only argv[0] and the first two arguments are read, so a worker
+# Its size is the proportional set size (Pss, from <proc>/<pid>/smaps_rollup)
+# summed over its whole process subtree, browser renderers included, so pages
+# a multi-process browser or test pool shares (the binary, libraries, shmem)
+# are split between its processes rather than counted once per process. A
+# member whose smaps_rollup is unreadable counts its VmRSS instead. Ship and
+# scout workers each drive their own chrome-devtools-axi session
+# (bin/fm-spawn.sh exports CHROME_DEVTOOLS_AXI_SESSION=fm-<task-id>), so a
+# worker's browser runs from its own worktree and is attributed to it alone.
+# Only argv[0] and the first two arguments are read, so a worker
 # agent whose brief merely mentions "vitest" is never mistaken for a job, and
 # a subtree that contains any worker-agent process is skipped outright.
 # Nothing outside a recorded worktree's process tree is ever a candidate.
@@ -285,19 +292,29 @@ fm_memory_gb() {
 
 # --- deferred work -----------------------------------------------------------
 
+# The deferral ledger holds "epoch<TAB>task<TAB>kind" lines, kind fresh or
+# relaunch. Admission removes a task's deferral; pruning also drops a fresh
+# deferral whose task has been spawned since (state/<id>.meta exists) and a
+# relaunch deferral whose task record is gone (torn down).
+
 # fm_memory_deferred_prune <state-dir> <now>: keep deferrals that are younger
-# than a day and whose task has not been spawned since (no state/<id>.meta).
+# than a day and still waiting (above).
 fm_memory_deferred_prune() {
-  local state=$1 now=$2 file="$1/.memory-deferred" tmp epoch task
+  local state=$1 now=$2 file="$1/.memory-deferred" tmp epoch task kind
   [ -f "$file" ] || return 0
   tmp="$file.tmp.$$"
   : >"$tmp" || return 0
-  while IFS="$(printf '\t')" read -r epoch task; do
+  while IFS="$(printf '\t')" read -r epoch task kind; do
     case "$epoch" in '' | *[!0-9]*) continue ;; esac
     [ -n "$task" ] || continue
     [ $((now - epoch)) -lt 86400 ] || continue
-    [ ! -e "$state/$task.meta" ] || continue
-    printf '%s\t%s\n' "$epoch" "$task" >>"$tmp"
+    if [ "$kind" = relaunch ]; then
+      [ -e "$state/$task.meta" ] || continue
+    else
+      kind=fresh
+      [ ! -e "$state/$task.meta" ] || continue
+    fi
+    printf '%s\t%s\t%s\n' "$epoch" "$task" "$kind" >>"$tmp"
   done <"$file"
   if [ -s "$tmp" ]; then
     mv -f "$tmp" "$file"
@@ -306,19 +323,20 @@ fm_memory_deferred_prune() {
   fi
 }
 
-# fm_memory_deferred_ids <state-dir>: space-separated deferred task ids.
+# fm_memory_deferred_ids <state-dir>: space-separated deferred task ids, a
+# deferred relaunch written as <id>(relaunch).
 fm_memory_deferred_ids() {
   local file="$1/.memory-deferred"
   [ -f "$file" ] || return 0
-  awk -F '\t' 'NF >= 2 && !seen[$2]++ { printf "%s%s", sep, $2; sep = " " }' "$file"
+  awk -F '\t' 'NF >= 2 && !seen[$2]++ { printf "%s%s%s", sep, $2, ($3 == "relaunch" ? "(relaunch)" : ""); sep = " " }' "$file"
 }
 
-fm_memory_deferred_add() {  # <state-dir> <task> <now>
+fm_memory_deferred_add() {  # <state-dir> <task> <now> <fresh|relaunch>
   local file="$1/.memory-deferred"
   if [ -f "$file" ] && awk -F '\t' -v t="$2" '$2 == t { found = 1 } END { exit !found }' "$file"; then
     return 0
   fi
-  printf '%s\t%s\n' "$3" "$2" >>"$file"
+  printf '%s\t%s\t%s\n' "$3" "$2" "$4" >>"$file"
   # A new deferral wants prompt notice the next time room frees.
   rm -f "$1/.memory-room-notified"
 }
@@ -341,11 +359,16 @@ fm_memory_deferred_remove() {  # <state-dir> <task>
 # --- events ------------------------------------------------------------------
 
 # fm_memory_event <state-dir> <now> <text>: record one captain-relevant event
-# for the watcher to surface (bin/fm-memory-watchdog.sh poll).
+# for the watcher to surface (bin/fm-memory-watchdog.sh poll). The append holds
+# the events lock that poll's trim also holds, so a trim never drops or skips
+# an event; a lock that cannot be taken in time still appends, since losing a
+# stop notice outright is worse than the narrow race.
 fm_memory_event() {
-  local text
+  local text lock="$1/.memory-watchdog.events.lock" held=0
   text=$(printf '%s' "$3" | tr '\t\n\r' '   ')
+  fm_lock_acquire_wait_bounded "$lock" 5 >/dev/null 2>&1 && held=1
   printf '%s\t%s\n' "$2" "$text" >>"$1/memory-watchdog.events"
+  [ "$held" = 0 ] || fm_lock_release "$lock"
 }
 
 # --- heavy jobs ----------------------------------------------------------------
@@ -442,10 +465,11 @@ fm_memory_task_worktrees() {
 }
 
 # fm_memory_heavy_jobs <state-dir> <out-file>: write one line per heavy job,
-# largest first: "rss_kb<TAB>task<TAB>root_pid<TAB>class<TAB>top<TAB>btop<TAB>
+# largest first: "size_kb<TAB>task<TAB>root_pid<TAB>class<TAB>top<TAB>btop<TAB>
 # member_pids(space-separated)". class is browser or runner; top is 1 for a
 # job's topmost heavy process (the critical line's candidates); btop is 1 for a
 # topmost browser process, whose tree the browser ceiling measures alone.
+# size_kb is the subtree's summed Pss with the VmRSS fallback (header).
 fm_memory_heavy_jobs() {
   local state=$1 out=$2 proc tmpd pid task
   proc=$(fm_memory_proc_root)
@@ -483,7 +507,7 @@ fm_memory_heavy_jobs() {
     printf '%s\t%s\t%s\n' "$pid" "$task" "$FM_MEM_CLASS" >>"$tmpd/heavy"
   done <"$tmpd/owned"
   if [ -s "$tmpd/heavy" ]; then
-    awk -F '\t' -v tbl="$tmpd/table" '
+    awk -F '\t' -v tbl="$tmpd/table" -v proc="$proc" '
       BEGIN {
         while ((getline l < tbl) > 0) {
           split(l, f, " "); parent[f[1]] = f[2]; rss[f[1]] = f[3]
@@ -491,8 +515,17 @@ fm_memory_heavy_jobs() {
         }
       }
       { heavy[$1] = $2; class[$1] = $3; order[++h] = $1 }
+      function size(p,   f, l, a, got) {
+        if (p in sz) return sz[p]
+        f = proc "/" p "/smaps_rollup"; got = 0
+        while ((getline l < f) > 0)
+          if (l ~ /^Pss:/) { split(l, a, " "); sz[p] = a[2] + 0; got = 1; break }
+        close(f)
+        if (!got) sz[p] = rss[p] + 0
+        return sz[p]
+      }
       function walk(p,   i, c, parts) {
-        members = members " " p; total += rss[p]
+        members = members " " p; total += size(p)
         c = split(kids[p], parts, " ")
         for (i = 1; i <= c; i++) if (parts[i] != "") walk(parts[i])
       }

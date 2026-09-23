@@ -35,7 +35,7 @@
 #   first in the private launch-brief overlay, including the exact task-owned
 #   steering inbox. This never rewrites a project's instruction files or a
 #   secondmate's charter.
-#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>]
+#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>] [--memory-override]
 #   --relaunch launches a replacement agent for an EXISTING task into that
 #   task's own recorded worktree, reusing its recorded endpoint when that
 #   endpoint still exists, instead of creating either from scratch. It is
@@ -228,7 +228,10 @@
 #   the same channel as GOTMPDIR, and bin/fm-test-run.sh refuses to execute the
 #   behavior suite from the repository primary checkout while that marker is
 #   set (its header owns the refusal). A secondmate runs in its own home and is
-#   not marked.
+#   not marked. Ship and scout panes and launches likewise receive
+#   `CHROME_DEVTOOLS_AXI_SESSION=fm-<task-id>` (the bare id when that would
+#   exceed the tool's 64-character limit), so each worker drives, and the memory
+#   watchdog measures, its own browser tree.
 #   Only after this isolation check, every fresh ship or scout requires a clean
 #   task worktree. When an origin configuration is detected, spawn fetches it,
 #   resolves the current remote default branch, and resets to its tip. When none
@@ -247,16 +250,22 @@
 #   usable offline; a stale remote-tracking ref can therefore make an unpushed
 #   commit look contained, which is exactly why no remedy command is printed.
 # Memory admission (bin/fm-memory-watchdog.sh admit):
-#   Every fresh ship or scout spawn asks the memory gate for admission after the
-#   backlog preflight and before any endpoint, worktree, or record exists. A
-#   closed gate, or one more worker that would cross its close line, DEFERS the
-#   spawn: it prints a `deferred: ...` line naming the reason, leaves the backlog
-#   item queued, and exits 75, and the memory watchdog notifies firstmate when
-#   room frees (docs/configuration.md "Memory gate"). --memory-override admits a
-#   spawn the captain explicitly directed regardless of the gate, still counting
-#   its reservation. Relaunch and --secondmate spawns are not gated: a relaunch
-#   replaces an existing task's agent, and a secondmate is a persistent
-#   supervisor its liveness sweep must be able to restore.
+#   Every ship or scout spawn, fresh or --relaunch, asks the memory gate for
+#   admission after the backlog preflight and before any endpoint, worktree, or
+#   record is created or touched. A closed gate, or one more worker that would
+#   cross its close line, DEFERS the spawn: it prints a `deferred: ...` line
+#   naming the reason, leaves the backlog item queued (or the relaunched task's
+#   record and endpoint untouched), and exits 75, and the memory watchdog
+#   notifies firstmate when room frees (docs/configuration.md "Memory gate").
+#   Relaunch is gated because crash recovery after a machine freeze relaunches
+#   every task at once, which is exactly the burst the gate exists to spread.
+#   --memory-override admits a spawn or relaunch the captain explicitly directed
+#   regardless of the gate, still counting its reservation. bin/fm-control.sh
+#   relaunch asks for admission itself before it stops the old agent and hands
+#   the result over as FM_MEMORY_ADMITTED=<task-id>, so its relaunch is not
+#   gated or reserved a second time. --secondmate spawns are not gated: a
+#   secondmate is a persistent supervisor its liveness sweep must be able to
+#   restore.
 # Batch dispatch: pass one or more `id=repo` pairs instead of a single <id> <project>, e.g.
 #     fm-spawn.sh fix-a-k3=projects/foo add-b-q7=projects/bar [--scout]
 #   Each pair re-execs this script in single-task mode, so the single path stays the only
@@ -761,8 +770,11 @@ esac
 # so every axis this block resolves for a fresh spawn instead comes from that
 # task's own durable record below. Contradicting it on the command line is a
 # refusal rather than a silently-ignored flag.
-if [ "$MEMORY_OVERRIDE" -eq 1 ] && { [ "$RELAUNCH" -eq 1 ] || [ "$KIND" = secondmate ]; }; then
-  echo "error: --memory-override applies only to fresh ship and scout spawns; relaunch and secondmate spawns are not memory-gated" >&2
+MEMORY_PREADMITTED=${FM_MEMORY_ADMITTED:-}
+unset FM_MEMORY_ADMITTED
+MEMORY_OVERRIDE_SECONDMATE_ERROR="error: --memory-override applies only to ship and scout spawns; secondmate spawns are not memory-gated"
+if [ "$MEMORY_OVERRIDE" -eq 1 ] && [ "$KIND" = secondmate ]; then
+  echo "$MEMORY_OVERRIDE_SECONDMATE_ERROR" >&2
   exit 1
 fi
 if [ "$RELAUNCH" -eq 1 ]; then
@@ -1703,6 +1715,10 @@ if [ "$RELAUNCH" -eq 1 ]; then
   # up (bin/fm-bootstrap.sh; the secondmate-provisioning skill). Rebinding one
   # here as well would be a second path to the same outcome, so this refuses
   # and names the one that owns it.
+  if [ "$MEMORY_OVERRIDE" -eq 1 ] && [ "$KIND" = secondmate ]; then
+    echo "$MEMORY_OVERRIDE_SECONDMATE_ERROR" >&2
+    exit 1
+  fi
   if [ "$RELAUNCH_REBIND" -eq 1 ] && [ "$KIND" = secondmate ]; then
     echo "error: secondmate $ID's recorded endpoint is gone; its recovery is owned by the secondmate respawn path, not by relaunch (run bin/fm-spawn.sh $ID --secondmate, or let the session-start liveness sweep do it)" >&2
     exit 1
@@ -3247,10 +3263,11 @@ if [ -e "$STATE/$ID.backlog-close" ] || [ -L "$STATE/$ID.backlog-close" ]; then
 fi
 
 # Memory admission (header): after the backlog proves the item dispatchable and
-# before any endpoint, worktree, or record exists, so a deferral leaves nothing
-# to unwind.
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
+# before any endpoint, worktree, or record is created or touched, so a deferral
+# leaves nothing to unwind.
+if [ "$KIND" != secondmate ] && { [ "$RELAUNCH" -eq 0 ] || [ "$MEMORY_PREADMITTED" != "$ID" ]; }; then
   memory_admit_args=("$ID")
+  [ "$RELAUNCH" -eq 0 ] || memory_admit_args+=(--relaunch)
   [ "$MEMORY_OVERRIDE" -eq 0 ] || memory_admit_args+=(--override)
   memory_admit_rc=0
   FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-memory-watchdog.sh" admit "${memory_admit_args[@]}" || memory_admit_rc=$?
@@ -4864,8 +4881,18 @@ fi
 # ones assigned an isolated worktree; a secondmate runs its own home instead.
 # The id reached a validated bare-slug charset above, so it carries no shell
 # syntax of its own.
+# Each ship or scout worker also drives its own chrome-devtools-axi session, so
+# its browser bridge and Chrome start from its own worktree instead of joining
+# the shared `default` session some other worker started. That is what lets the
+# memory watchdog attribute a ballooning browser to the worker that owns it and
+# keep measuring it after another task is torn down (bin/fm-memory-lib.sh). The
+# session name allows 1-64 of [A-Za-z0-9._-]; an id too long for the fm- prefix
+# uses the bare id, which is already unique in this home.
 if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   spawn_send_text_line "$T" "export FM_TASK_ID=$ID"
+  CHROME_DEVTOOLS_AXI_SESSION_NAME="fm-$ID"
+  [ "${#CHROME_DEVTOOLS_AXI_SESSION_NAME}" -le 64 ] || CHROME_DEVTOOLS_AXI_SESSION_NAME=$ID
+  spawn_send_text_line "$T" "export CHROME_DEVTOOLS_AXI_SESSION=$CHROME_DEVTOOLS_AXI_SESSION_NAME"
 fi
 # Send through the exact channel that already ships GOTMPDIR, so every backend
 # and harness - ship, scout, and secondmate - gets it before launch. Skipped
@@ -4893,7 +4920,7 @@ if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
     TMPDIR TMP TEMP GOTMPDIR TMUX TMUX_PANE HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH \
     HERDR_PANE_ID CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_TAB_ID CMUX_PANEL_ID \
     CMUX_SOCKET_PATH ZELLIJ ZELLIJ_SESSION_NAME ZELLIJ_PANE_ID FM_ZELLIJ_SESSION \
-    FM_TASK_ID COMPACT_ADVISER_DISABLE LAVISH_AXI_HOST \
+    FM_TASK_ID CHROME_DEVTOOLS_AXI_SESSION COMPACT_ADVISER_DISABLE LAVISH_AXI_HOST \
     $LAUNCH_ENV_NAMES; do
     # Only validated names enter shell syntax. Values expand once, quoted, in
     # the pane shell and never become source text or spawn-process snapshots.

@@ -12,14 +12,16 @@
 #       else, each group in the backlog's own request order.
 #   fm-memory-watchdog.sh flagship [<project> | --clear]
 #       Print, set, or clear config/flagship.
-#   fm-memory-watchdog.sh admit <task-id> [--override]
-#       Admission for one fresh worker, called by bin/fm-spawn.sh. Exit 0
-#       admits and records a reservation; exit 75 defers (the task stays
-#       queued, is recorded as deferred, and the loop reports when room frees);
-#       exit 1 is an error such as a malformed config/memory-gate. --override
-#       admits regardless, still recording the reservation, for a spawn the
-#       captain explicitly directed. Without a readable /proc/meminfo the gate
-#       admits with a warning rather than blocking every spawn.
+#   fm-memory-watchdog.sh admit <task-id> [--relaunch] [--override]
+#       Admission for one ship or scout worker, called by bin/fm-spawn.sh for a
+#       fresh spawn and by bin/fm-control.sh (or a direct fm-spawn --relaunch)
+#       for a relaunch, which --relaunch marks. Exit 0 admits and records a
+#       reservation; exit 75 defers (the task is recorded as deferred and the
+#       loop reports when room frees); exit 1 is an error such as a malformed
+#       config/memory-gate. --override admits regardless, still recording the
+#       reservation, for a spawn or relaunch the captain explicitly directed.
+#       Without a readable /proc/meminfo the gate admits with a warning rather
+#       than blocking every spawn.
 #   fm-memory-watchdog.sh poll
 #       One watcher-cycle call (bin/fm-watch.sh): make sure the loop runs while
 #       this home has task records or deferred work, then print one
@@ -39,7 +41,9 @@
 # is never an always-on daemon. The watcher stays the only path that wakes
 # firstmate: the loop only records events.
 #
-# Each tick: sample memory, apply the gate's hysteresis, then
+# Each tick: sample memory, apply the gate's hysteresis when the gate lock is
+# free right now (a held lock only postpones the gate update to the next tick,
+# never the protection below), then
 #   - job ceilings, at any memory level: stop every headless browser tree over
 #     browser_ceiling_mb and every test-run or terraform job over
 #     job_ceiling_mb (browser trees first, so a browser inside a test run is
@@ -55,12 +59,15 @@
 #   - room: when deferred work exists and one more worker fits, record a room
 #     event, repeating at most every FM_MEMORY_ROOM_RENOTIFY seconds (default
 #     600) while the work stays deferred.
+# Job sizes are the summed Pss that bin/fm-memory-lib.sh's header defines, and
+# every worker notice and event names that figure as PSS.
 #
 # Records (bin/fm-memory-lib.sh's header owns which directory the shared ones
 # live in): shared .memory-gate, .memory-reservations, .memory-gate.lock,
 # .memory-critical-last; per home .memory-deferred, .memory-room-notified,
-# .memory-critical-episode, memory-watchdog.events, .memory-watchdog.cursor,
-# and the .memory-watchdog.lock loop singleton.
+# .memory-critical-episode, memory-watchdog.events (appended and trimmed only
+# under .memory-watchdog.events.lock), .memory-watchdog.cursor, and the
+# .memory-watchdog.lock loop singleton.
 #
 # FM_MEMORY_SEND_CMD replaces bin/fm-send.sh for the worker notice (tests only).
 # FM_MEMORY_WATCHDOG_DISABLE=1 turns admit, poll, ensure, loop, and tick into
@@ -126,6 +133,7 @@ gate_lock() {
   fm_lock_acquire_wait_bounded "$GATE_LOCK" 10 >/dev/null 2>&1
 }
 LOOP_LOCK="$STATE/.memory-watchdog.lock"
+EVENTS_LOCK="$STATE/.memory-watchdog.events.lock"
 
 config_or_die() {
   if ! fm_memory_load_config "$CONFIG"; then
@@ -276,20 +284,22 @@ cmd_queue() {
 # --- admission -----------------------------------------------------------------
 
 cmd_admit() {
-  local task=${1:-} override=0 now
+  local task=${1:-} override=0 kind=fresh now arg
   [ -n "$task" ] || {
     echo "error: admit needs a task id" >&2
     return 1
   }
   shift
-  case "${1:-}" in
-    '') ;;
-    --override) override=1 ;;
-    *)
-      echo "error: unknown admit option '$1'" >&2
-      return 1
-      ;;
-  esac
+  for arg in "$@"; do
+    case "$arg" in
+      --override) override=1 ;;
+      --relaunch) kind=relaunch ;;
+      *)
+        echo "error: unknown admit option '$arg'" >&2
+        return 1
+        ;;
+    esac
+  done
   config_or_die
   [ "$FM_MEMORY_ENABLED" = 1 ] || return 0
   now=$(now_epoch)
@@ -315,7 +325,7 @@ cmd_admit() {
     return 0
   fi
   fm_lock_release "$GATE_LOCK"
-  fm_memory_deferred_add "$STATE" "$task" "$now"
+  fm_memory_deferred_add "$STATE" "$task" "$now" "$kind"
   # Deferred work needs the loop to notice room freeing, even in an empty fleet.
   cmd_ensure >/dev/null 2>&1 || true
   if [ "$FM_MEM_GATE" = closed ]; then
@@ -380,11 +390,11 @@ EOF_ROW
       stopped="$stopped$members "
       CEILING_STOPPED=1
       if [ "$pass" = browser ]; then
-        msg="Memory watchdog: your headless browser grew to about $gb GB ('$label', process $root and its children), past the $cgb GB ceiling for one browser, so I stopped it before it could freeze the machine. Nothing else of yours was touched. Keep one headless browser at a time, close it between screenshots, and use a small viewport (for example 1280x800), then carry on."
-        fm_memory_event "$STATE" "$now" "job ceiling: stopped $task's headless browser '$label' at about $gb GB (ceiling $cgb GB) and told its worker"
+        msg="Memory watchdog: your headless browser grew to about $gb GB PSS ('$label', process $root and its children, shared pages split between them), past the $cgb GB ceiling for one browser, so I stopped it before it could freeze the machine. Nothing else of yours was touched. Keep one headless browser at a time, close it between screenshots, and use a small viewport (for example 1280x800), then carry on."
+        fm_memory_event "$STATE" "$now" "job ceiling: stopped $task's headless browser '$label' at about $gb GB PSS (ceiling $cgb GB) and told its worker"
       else
-        msg="Memory watchdog: your job '$label' (process $root and its children) grew to about $gb GB, past the $cgb GB ceiling for one test or terraform job, so I stopped it before it could freeze the machine. Nothing else of yours was touched. Re-run it smaller - fewer workers (for example --maxWorkers=2) or a narrower selection - and report through your status line if it cannot run smaller."
-        fm_memory_event "$STATE" "$now" "job ceiling: stopped $task's job '$label' at about $gb GB (ceiling $cgb GB) and told its worker"
+        msg="Memory watchdog: your job '$label' (process $root and its children) grew to about $gb GB PSS (shared pages split between its processes), past the $cgb GB ceiling for one test or terraform job, so I stopped it before it could freeze the machine. Nothing else of yours was touched. Re-run it smaller - fewer workers (for example --maxWorkers=2) or a narrower selection - and report through your status line if it cannot run smaller."
+        fm_memory_event "$STATE" "$now" "job ceiling: stopped $task's job '$label' at about $gb GB PSS (ceiling $cgb GB) and told its worker"
       fi
       notify_worker "$task" "$label" "$now" "$msg"
     done <"$jobs"
@@ -420,9 +430,9 @@ EOF_JOB
   gb=$(fm_memory_gb "$rss")
   printf '%s\n' "$now" >"$SHARED/.memory-critical-last"
   fm_memory_stop_job "$members"
-  msg="Memory watchdog: this machine reached ${FM_MEM_USED_PCT}% memory in use, past the ${FM_MEMORY_CRITICAL}% critical line, so I stopped your heaviest job to keep the machine from freezing: '$label' (process $root and its children, about $gb GB). Nothing else of yours was touched. Do not immediately re-run it at full size: re-run it with less parallelism (fewer test or browser workers) or once memory has freed, and report through your status line if it cannot wait."
+  msg="Memory watchdog: this machine reached ${FM_MEM_USED_PCT}% memory in use, past the ${FM_MEMORY_CRITICAL}% critical line, so I stopped your heaviest job to keep the machine from freezing: '$label' (process $root and its children, about $gb GB PSS). Nothing else of yours was touched. Do not immediately re-run it at full size: re-run it with less parallelism (fewer test or browser workers) or once memory has freed, and report through your status line if it cannot wait."
   notify_worker "$task" "$label" "$now" "$msg"
-  fm_memory_event "$STATE" "$now" "critical line: memory reached ${FM_MEM_USED_PCT}% (critical ${FM_MEMORY_CRITICAL}%), so the watchdog stopped $task's heaviest job '$label' (about $gb GB) and told its worker"
+  fm_memory_event "$STATE" "$now" "critical line: memory reached ${FM_MEM_USED_PCT}% (critical ${FM_MEMORY_CRITICAL}%), so the watchdog stopped $task's heaviest job '$label' (about $gb GB PSS) and told its worker"
 }
 
 room_check() {  # <now>
@@ -435,7 +445,7 @@ room_check() {  # <now>
   case "$last" in '' | *[!0-9]*) last=0 ;; esac
   [ $((now - last)) -ge "$ROOM_RENOTIFY" ] || return 0
   printf '%s\n' "$now" >"$STATE/.memory-room-notified"
-  fm_memory_event "$STATE" "$now" "room for queued work: memory gate open at ${FM_MEM_COUNTED_PCT}% counted (closes at ${FM_MEMORY_CLOSE}%), deferred: $deferred - dispatch in bin/fm-memory-watchdog.sh queue order until a spawn is deferred again"
+  fm_memory_event "$STATE" "$now" "room for queued work: memory gate open at ${FM_MEM_COUNTED_PCT}% counted (closes at ${FM_MEMORY_CLOSE}%), deferred: $deferred - dispatch in bin/fm-memory-watchdog.sh queue order and relaunch each <id>(relaunch) with bin/fm-control.sh <id> relaunch, until one is deferred again"
 }
 
 cmd_tick() {
@@ -452,14 +462,12 @@ cmd_tick() {
   [ "$FM_MEMORY_ENABLED" = 1 ] || return 0
   now=$(now_epoch)
   fm_memory_sample "$SHARED" "$now" || return 0
-  gate_lock || return 0
-  fm_memory_prune_reservations "$SHARED" "$now"
-  fm_memory_sample "$SHARED" "$now" || {
+  FM_MEM_GATE=$(fm_memory_gate_state "$SHARED")
+  if [ -d "$SHARED" ] && fm_lock_try_acquire "$GATE_LOCK" >/dev/null 2>&1; then
+    fm_memory_prune_reservations "$SHARED" "$now"
+    ! fm_memory_sample "$SHARED" "$now" || fm_memory_gate_update "$SHARED" "$now"
     fm_lock_release "$GATE_LOCK"
-    return 0
-  }
-  fm_memory_gate_update "$SHARED" "$now"
-  fm_lock_release "$GATE_LOCK"
+  fi
   jobs=$(mktemp "${TMPDIR:-/tmp}/fm-memory-jobs.XXXXXX") || jobs=
   if [ -n "$jobs" ]; then
     fm_memory_heavy_jobs "$STATE" "$jobs" || : >"$jobs"
@@ -533,9 +541,17 @@ cmd_ensure() {
 }
 
 cmd_poll() {
-  local events="$STATE/memory-watchdog.events" cursor size text
+  local rc=0
   cmd_ensure
-  [ -f "$events" ] || return 0
+  [ -f "$STATE/memory-watchdog.events" ] || return 0
+  fm_lock_acquire_wait_bounded "$EVENTS_LOCK" 5 >/dev/null 2>&1 || return 0
+  poll_locked || rc=$?
+  fm_lock_release "$EVENTS_LOCK"
+  return "$rc"
+}
+
+poll_locked() {  # the events lock is held
+  local events="$STATE/memory-watchdog.events" cursor size text
   cursor=$(cat "$STATE/.memory-watchdog.cursor" 2>/dev/null || echo 0)
   case "$cursor" in '' | *[!0-9]*) cursor=0 ;; esac
   size=$(wc -c <"$events" | tr -d '[:space:]')

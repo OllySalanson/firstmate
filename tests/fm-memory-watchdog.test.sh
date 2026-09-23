@@ -70,7 +70,8 @@ printf '%s\t%s\n' "$1" "$2" >>"$FM_HOME/sent.log"
 SH
 chmod +x "$TMP_ROOT/fake-send"
 
-# fake_proc <pid> <ppid> <rss-kb> <cwd> <argv...>
+# fake_proc <pid> <ppid> <rss-kb> <cwd> <argv...>: Pss equals the RSS unless
+# set_pss changes it.
 fake_proc() {
   local pid=$1 ppid=$2 rss=$3 cwd=$4
   shift 4
@@ -80,7 +81,13 @@ fake_proc() {
     "${1##*/}" "$pid" "$ppid" "$rss" >"$P/$pid/status"
   printf '%s (%s) S %s 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 4242 0 0\n' \
     "$pid" "${1##*/}" "$ppid" >"$P/$pid/stat"
+  set_pss "$pid" "$rss"
   ln -sfn "$cwd" "$P/$pid/cwd"
+}
+
+set_pss() {  # <pid> <pss-kb>
+  printf '00400000-7ffff000 ---p 00000000 00:00 0                          [rollup]\nRss:            %s kB\nPss:            %s kB\n' \
+    "$(awk '/^VmRSS:/ { print $2 }' "$P/$1/status")" "$2" >"$P/$1/smaps_rollup"
 }
 
 sleeper() {  # prints the pid of a fresh real process standing in for a job
@@ -221,7 +228,7 @@ test_critical_stops_largest_heavy_job_only() {
   assert_contains "$sent" "t1"$'\t'"Memory watchdog: this machine reached 96% memory" "the worker was not told"
   assert_contains "$sent" "'node vitest.mjs run'" "the notice did not name the stopped job"
   out=$(wd poll)
-  assert_contains "$out" "memory-watchdog: critical line: memory reached 96% (critical 95%), so the watchdog stopped t1's heaviest job 'node vitest.mjs run' (about 3.0 GB)" "firstmate was not given the stop"
+  assert_contains "$out" "memory-watchdog: critical line: memory reached 96% (critical 95%), so the watchdog stopped t1's heaviest job 'node vitest.mjs run' (about 3.0 GB PSS)" "firstmate was not given the stop"
   assert_equals "" "$(wd poll)" "a surfaced event was repeated"
   # The cooldown keeps a second tick from stopping another job at once.
   wd tick
@@ -383,17 +390,96 @@ test_spawn_defers_and_overrides() {
   assert_contains "$out" "deferred: $id stays queued" "the spawn did not report a deferral"
   assert_absent "$home/state/$id.meta" "a deferred spawn left a task record"
   [ ! -s "$case_dir/launch.log" ] || fail "a deferred spawn launched a worker"
-  out=$(FM_MEMORY_PROC_ROOT="$P" FM_FAKE_LAUNCH_LOG="$case_dir/launch.log" FM_MEMORY_WATCHDOG_IDLE_EXIT=1 \
-    fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" --mode no-mistakes --yolo off --memory-override)
+  out=$(FM_MEMORY_PROC_ROOT="$P" FM_FAKE_LAUNCH_LOG="$case_dir/launch.log" FM_FAKE_PANE_LOG="$case_dir/pane.log" \
+    FM_MEMORY_WATCHDOG_IDLE_EXIT=1 fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" --mode no-mistakes --yolo off --memory-override)
   rc=$?
   expect_code 0 "$rc" "an overridden spawn"$'\n'"$out"
   assert_contains "$out" "spawned $id" "the override did not launch"
   assert_contains "$(cat "$case_dir/launch.log")" "plugin:pdf-viewer:pdf" "the worker launch does not deny the PDF viewer helper"
   pid=$(cat "$home/state/.memory-watchdog.lock/pid" 2>/dev/null || true)
   [ -z "$pid" ] || kill -KILL "$pid" 2>/dev/null
-  out=$(FM_MEMORY_PROC_ROOT="$P" fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" --relaunch --memory-override)
-  assert_contains "$out" "--memory-override applies only to fresh ship and scout spawns" "a relaunch accepted the override"
-  pass "fm-spawn defers a fresh spawn over the gate, admits it on --memory-override, and never gates relaunch"
+  assert_contains "$(cat "$case_dir/pane.log")" "export CHROME_DEVTOOLS_AXI_SESSION=fm-$id" "the worker pane does not own a per-task browser session"
+  out=$(FM_MEMORY_PROC_ROOT="$P" fm_test_run_spawn "$home" "$wt" "$fakebin" sm-z3 --secondmate --memory-override)
+  assert_contains "$out" "secondmate spawns are not memory-gated" "a secondmate spawn accepted the override"
+  pass "fm-spawn defers a fresh spawn over the gate, admits it on --memory-override, and refuses the override for a secondmate"
+}
+
+test_room_event_names_a_deferred_relaunch() {
+  local out
+  new_case roomrl
+  task_meta rl1 "$TMP_ROOT/roomrl/wt"
+  set_mem 90
+  wd admit rl1 --relaunch 2>/dev/null
+  expect_code 75 "$?" "a relaunch admission at 90%"
+  set_mem 40
+  wd tick
+  out=$(wd poll)
+  assert_contains "$out" "deferred: rl1(relaunch)" "the room notice did not name the deferred relaunch"
+  assert_contains "$out" "bin/fm-control.sh <id> relaunch" "the room notice did not say how to relaunch it"
+  rm -f "$H/state/rl1.meta"
+  assert_contains "$(wd status)" "deferred work: none" "a deferred relaunch outlived its torn-down task"
+  pass "a deferred relaunch is announced as one when room frees and dropped when its task is torn down"
+}
+
+test_job_size_is_pss_with_rss_fallback() {
+  local wt="$TMP_ROOT/pss/wt" browser r1 r2 r3 other orenderer
+  new_case pss
+  task_meta t6 "$wt"
+  set_mem 40
+  sleeper; browser=$LAST_SLEEPER
+  sleeper; r1=$LAST_SLEEPER
+  sleeper; r2=$LAST_SLEEPER
+  sleeper; r3=$LAST_SLEEPER
+  sleeper; other=$LAST_SLEEPER
+  sleeper; orenderer=$LAST_SLEEPER
+  # 4 GB of summed RSS, but most of it is the same shared pages: 1.2 GB PSS.
+  fake_proc "$browser" 1 $((GB)) "$wt" chromium --headless
+  fake_proc "$r1" "$browser" $((GB)) / chromium --type=renderer
+  fake_proc "$r2" "$browser" $((GB)) / chromium --type=renderer
+  fake_proc "$r3" "$browser" $((GB)) / chromium --type=renderer
+  for pid in "$browser" "$r1" "$r2" "$r3"; do set_pss "$pid" $((3 * GB / 10)); done
+  # No readable smaps_rollup: the RSS counts instead, 2 GB over the ceiling.
+  fake_proc "$other" 1 $((GB)) "$wt" chrome --headless=new
+  fake_proc "$orenderer" "$other" $((GB)) / chrome --type=renderer
+  rm -f "$P/$other/smaps_rollup" "$P/$orenderer/smaps_rollup"
+  wd tick
+  sleep 0.3
+  kill -0 "$browser" 2>/dev/null || fail "a browser under the ceiling by PSS was stopped for its shared pages"
+  kill -0 "$r1" 2>/dev/null || fail "a renderer of a browser under the ceiling by PSS was stopped"
+  kill -0 "$other" 2>/dev/null && fail "a browser without readable PSS was not measured by its RSS"
+  assert_contains "$(cat "$H/sent.log")" "grew to about 2.0 GB PSS" "the notice did not name the measured figure"
+  pass "a job is sized by summed PSS, falling back to RSS where PSS is unreadable"
+}
+
+test_tick_protects_while_the_gate_lock_is_held() {
+  local wt="$TMP_ROOT/locked/wt" holder browser start
+  new_case locked
+  task_meta t7 "$wt"
+  set_mem 40
+  sleeper; holder=$LAST_SLEEPER
+  sleeper; browser=$LAST_SLEEPER
+  mkdir -p "$H/state/.memory-gate.lock"
+  printf '%s\n' "$holder" >"$H/state/.memory-gate.lock/pid"
+  fake_proc "$browser" 1 $((2 * GB)) "$wt" chromium --headless
+  start=$(date +%s)
+  wd tick
+  sleep 0.3
+  kill -0 "$browser" 2>/dev/null && fail "a held gate lock turned off the job ceiling"
+  [ $(($(date +%s) - start)) -lt 8 ] || fail "a held gate lock blocked the tick"
+  pass "a held gate lock postpones only the gate update, never the job stops"
+}
+
+test_poll_trim_keeps_later_events() {
+  local line out
+  new_case trim
+  line=$(printf 'x%.0s' $(seq 1 200))
+  for _ in $(seq 1 400); do printf '1\t%s\n' "$line"; done >"$H/state/memory-watchdog.events"
+  wd poll >/dev/null
+  [ "$(wc -c <"$H/state/memory-watchdog.events")" -lt 65536 ] || fail "the surfaced events were not trimmed"
+  FM_STATE_OVERRIDE="$H/state" bash -c '. "$1/bin/fm-memory-lib.sh"; STATE=$2; FM_ROOT=$1; fm_memory_event "$2" 2 "after the trim"' _ "$ROOT" "$H/state"
+  out=$(wd poll)
+  assert_equals "memory-watchdog: after the trim" "$out" "an event appended after a trim was not surfaced exactly once"
+  pass "trimming surfaced events keeps every later event for the next poll"
 }
 
 test_browser_ceiling_stops_a_ballooning_browser_alone() {
@@ -421,7 +507,7 @@ test_browser_ceiling_stops_a_ballooning_browser_alone() {
   assert_contains "$sent" "t4"$'\t'"Memory watchdog: your headless browser grew to about 2.0 GB" "the worker was not told its browser was stopped"
   assert_contains "$sent" "close it between screenshots, and use a small viewport" "the notice did not say how to stay small"
   out=$(wd poll)
-  assert_contains "$out" "job ceiling: stopped t4's headless browser 'headless_shell --headless' at about 2.0 GB (ceiling 1.5 GB)" "firstmate was not told of the ceiling stop"
+  assert_contains "$out" "job ceiling: stopped t4's headless browser 'headless_shell --headless' at about 2.0 GB PSS (ceiling 1.5 GB)" "firstmate was not told of the ceiling stop"
   pass "one browser tree over its ceiling is stopped early, alone, even while total memory is fine"
 }
 
@@ -460,4 +546,8 @@ test_room_event_for_deferred_work
 test_queue_orders_flagship_first
 test_loop_runs_only_while_work_exists
 test_spawn_defers_and_overrides
+test_room_event_names_a_deferred_relaunch
+test_job_size_is_pss_with_rss_fallback
+test_tick_protects_while_the_gate_lock_is_held
+test_poll_trim_keeps_later_events
 echo "# all fm-memory-watchdog tests passed"

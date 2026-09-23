@@ -462,12 +462,13 @@ It reads `/proc/meminfo`, so it works on Linux and WSL; on a platform without it
 "Memory used" is RAM the kernel cannot hand out without swapping (MemTotal minus MemAvailable) as a percentage of MemTotal, and each worker admitted in the last few minutes also counts as reserved memory until its own memory shows up, so a burst of spawns can never be admitted all at once.
 
 The gate closes when counted memory reaches the close line (default 85%), or when swap is nearly exhausted, and reopens only below the reopen line (default 70%).
-A fresh ship or scout spawn is admitted only while the gate is open and one more reserved worker still stays under the close line.
-Relaunches and secondmate spawns are not gated.
+A ship or scout spawn is admitted only while the gate is open and one more reserved worker still stays under the close line.
+That includes relaunches (`bin/fm-control.sh <id> relaunch`, or `bin/fm-spawn.sh <id> --relaunch` directly), because recovering from a machine freeze relaunches every task at once; fm-control asks for admission before it stops the old agent.
+Secondmate spawns are not gated.
 
-A spawn the gate refuses prints a `deferred:` line, leaves its backlog item queued, and exits 75.
-`--memory-override` admits a spawn the captain explicitly directed anyway.
-When room frees, the watchdog records a notice that the watcher delivers to firstmate as a `check: memory-watchdog: room for queued work ...` wake, and firstmate dispatches in queue order until a spawn is deferred again.
+A spawn the gate refuses prints a `deferred:` line, leaves its backlog item queued, and exits 75; a refused relaunch exits 75 the same way with its old agent, endpoint, and record untouched.
+`--memory-override`, on `bin/fm-spawn.sh` or on `bin/fm-control.sh <id> relaunch`, admits a spawn or relaunch the captain explicitly directed anyway.
+When room frees, the watchdog records a notice that the watcher delivers to firstmate as a `check: memory-watchdog: room for queued work ...` wake naming the deferred work, with a deferred relaunch written as `<id>(relaunch)`, and firstmate dispatches in queue order and relaunches those tasks until one is deferred again.
 `bin/fm-memory-watchdog.sh queue` gives that order: this home's dispatchable queued work with the flagship project's items first, then everything else in the backlog's own order, which is the order the captain asked for it.
 
 When memory in use reaches the critical line (default 95%), the watchdog stops the single largest heavy job - a test runner, a headless browser, or terraform - running under a recorded ship or scout task's local copy.
@@ -476,7 +477,9 @@ It never stops a worker agent or anything outside a recorded task's process tree
 
 Job ceilings stop a ballooning job early, even while total memory is fine.
 One headless browser tree above its ceiling (default 1.5 GB), or one test-run or terraform job above its ceiling (default 3 GB), is stopped and its worker told why, under the same agent and process-tree limits as the critical line.
+A job's size is the proportional set size (PSS) of its process tree, so pages a multi-process browser or test pool shares are split between its processes rather than counted once per process; a process whose PSS cannot be read counts its resident size instead.
 A browser inside a test run is measured by itself, so only the browser is stopped.
+Every ship and scout worker is launched with `CHROME_DEVTOOLS_AXI_SESSION=fm-<task-id>`, so each drives its own chrome-devtools-axi browser, started from its own local copy, and a ballooning browser is attributed to and stopped for the worker that owns it.
 Ship and scout briefs (`bin/fm-brief.sh`) tell workers to keep one headless browser at a time, close it between screenshots, use a small viewport, and cap test-runner workers.
 
 `config/flagship` is optional, local, and gitignored, and holds one project name matching the backlog's `repo:` field; set it with `bin/fm-memory-watchdog.sh flagship <project>` and clear it with `--clear`.

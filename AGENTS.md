@@ -325,7 +325,7 @@ An unregistered project or absent registry resolves to `no-mistakes` with yolo o
 Record the resulting mode, `yolo` merge posture, and the one-line reason for any deviation in the backlog item note.
 
 Treat file or subsystem overlap as a risk signal rather than an automatic reason to wait, and dispatch isolated work immediately, with no concurrency cap beyond the memory gate, when each change can be independently implemented and validated and the selected delivery path can reconcile ordinary rebases or conflicts.
-Admission is memory-gated: a fresh spawn the gate defers stays queued, dispatch resumes in `bin/fm-memory-watchdog.sh queue` order (flagship project first, then request order) when its room notification arrives, and `--memory-override` needs the captain's explicit word ([`docs/configuration.md`](docs/configuration.md) "Memory gate").
+Admission is memory-gated, relaunches of ship and scout tasks included: a fresh spawn the gate defers stays queued, a deferred relaunch leaves its task untouched, dispatch resumes in `bin/fm-memory-watchdog.sh queue` order (flagship project first, then request order) when its room notification arrives, and `--memory-override` needs the captain's explicit word ([`docs/configuration.md`](docs/configuration.md) "Memory gate").
 Serialize only for a true semantic dependency, shared mutable external state, incompatible concurrent migration, or another concrete condition that makes independent progress or reconciliation unsafe; same-file editing alone is insufficient, and genuine blockers remain durable.
 Write the task-specific brief under section 11 before spawning.
 Fill the task subsections according to section 11.
