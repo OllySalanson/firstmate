@@ -5,7 +5,7 @@
 # Usage:
 #   fm-memory-watchdog.sh status
 #       Human-readable gate state: memory used, reservations, the three lines,
-#       the flagship, deferred work, and whether the watchdog loop is running.
+#       the job ceilings, the flagship, deferred work, and whether the watchdog loop is running.
 #   fm-memory-watchdog.sh queue
 #       This home's dispatchable queued work (bin/fm-tasks-axi.sh ready) in
 #       dispatch order: the flagship project's items first, then everything
@@ -40,6 +40,11 @@
 # firstmate: the loop only records events.
 #
 # Each tick: sample memory, apply the gate's hysteresis, then
+#   - job ceilings, at any memory level: stop every headless browser tree over
+#     browser_ceiling_mb and every test-run or terraform job over
+#     job_ceiling_mb (browser trees first, so a browser inside a test run is
+#     stopped by itself), tell each worker through bin/fm-send.sh, and record
+#     an event.
 #   - critical line: when plain used >= critical and no stop happened in the
 #     last FM_MEMORY_CRITICAL_COOLDOWN seconds (default 20, shared machine-wide),
 #     stop the single largest heavy job under a recorded task worktree
@@ -166,6 +171,8 @@ cmd_status() {
   fi
   printf 'lines: closes at %s%%, reopens below %s%%, critical stop at %s%%; each new worker reserves %s MB for %ss\n' \
     "$FM_MEMORY_CLOSE" "$FM_MEMORY_REOPEN" "$FM_MEMORY_CRITICAL" "$FM_MEMORY_RESERVE_MB" "$FM_MEMORY_RESERVE_SECS"
+  printf 'job ceilings: one headless browser tree %s MB, one test or terraform job %s MB\n' \
+    "$FM_MEMORY_BROWSER_CEILING_MB" "$FM_MEMORY_JOB_CEILING_MB"
   flagship=$(fm_memory_flagship "$CONFIG")
   printf 'flagship: %s\n' "${flagship:-none (set with bin/fm-memory-watchdog.sh flagship <project>)}"
   fm_memory_deferred_prune "$STATE" "$now"
@@ -335,20 +342,70 @@ describe_job() {  # <root-pid>: a short human label from the job's own argv
   printf '%s' "$label" | cut -c1-80
 }
 
-critical_stop() {  # <now>
-  local now=$1 jobs last rss task root members label gb msg chosen=
+notify_worker() {  # <task> <label> <now> <message>
+  FM_HOME="$FM_HOME" "${FM_MEMORY_SEND_CMD:-$SCRIPT_DIR/fm-send.sh}" "$1" "$4" </dev/null >/dev/null 2>&1 ||
+    fm_memory_event "$STATE" "$3" "could not deliver the job-stop notice to $1's worker - tell it that '$2' was stopped for memory"
+}
+
+# ceiling_check <now> <jobs-file>: stop every job over its ceiling (header),
+# browser trees first so a ballooning browser inside a test run is stopped by
+# itself rather than taking the whole run with it. Sets CEILING_STOPPED=1.
+ceiling_check() {
+  local now=$1 jobs=$2 row rss task root class top btop members limit_mb label gb cgb msg pass stopped=' ' pid overlap
+  CEILING_STOPPED=0
+  for pass in browser runner; do
+    while IFS= read -r row; do
+      [ -n "$row" ] || continue
+      IFS=$'\t' read -r rss task root class top btop members <<EOF_ROW
+$row
+EOF_ROW
+      if [ "$pass" = browser ]; then
+        [ "$class" = browser ] && [ "$btop" = 1 ] || continue
+        limit_mb=$FM_MEMORY_BROWSER_CEILING_MB
+      else
+        [ "$class" = runner ] && [ "$top" = 1 ] || continue
+        limit_mb=$FM_MEMORY_JOB_CEILING_MB
+      fi
+      [ "$rss" -gt $((limit_mb * 1024)) ] || continue
+      overlap=0
+      for pid in $members; do
+        case "$stopped" in *" $pid "*) overlap=1 ;; esac
+      done
+      [ "$overlap" = 0 ] || continue
+      fm_memory_subtree_has_agent "$members" && continue
+      label=$(describe_job "$root")
+      gb=$(fm_memory_gb "$rss")
+      cgb=$(fm_memory_gb $((limit_mb * 1024)))
+      fm_memory_stop_job "$members"
+      stopped="$stopped$members "
+      CEILING_STOPPED=1
+      if [ "$pass" = browser ]; then
+        msg="Memory watchdog: your headless browser grew to about $gb GB ('$label', process $root and its children), past the $cgb GB ceiling for one browser, so I stopped it before it could freeze the machine. Nothing else of yours was touched. Keep one headless browser at a time, close it between screenshots, and use a small viewport (for example 1280x800), then carry on."
+        fm_memory_event "$STATE" "$now" "job ceiling: stopped $task's headless browser '$label' at about $gb GB (ceiling $cgb GB) and told its worker"
+      else
+        msg="Memory watchdog: your job '$label' (process $root and its children) grew to about $gb GB, past the $cgb GB ceiling for one test or terraform job, so I stopped it before it could freeze the machine. Nothing else of yours was touched. Re-run it smaller - fewer workers (for example --maxWorkers=2) or a narrower selection - and report through your status line if it cannot run smaller."
+        fm_memory_event "$STATE" "$now" "job ceiling: stopped $task's job '$label' at about $gb GB (ceiling $cgb GB) and told its worker"
+      fi
+      notify_worker "$task" "$label" "$now" "$msg"
+    done <"$jobs"
+  done
+}
+
+critical_stop() {  # <now> <jobs-file>
+  local now=$1 jobs=$2 last row rss task root class top btop members label gb msg chosen=
   last=$(cat "$SHARED/.memory-critical-last" 2>/dev/null || echo 0)
   case "$last" in '' | *[!0-9]*) last=0 ;; esac
   [ $((now - last)) -ge "$CRITICAL_COOLDOWN" ] || return 0
-  jobs=$(mktemp "${TMPDIR:-/tmp}/fm-memory-jobs.XXXXXX") || return 0
-  fm_memory_heavy_jobs "$STATE" "$jobs" || true
-  # Largest first; the first job whose subtree holds no worker agent is it.
-  while IFS= read -r chosen; do
-    members=${chosen##*$'\t'}
-    fm_memory_subtree_has_agent "$members" || break
-    chosen=
+  # Largest whole job first; the first whose subtree holds no worker agent is it.
+  while IFS= read -r row; do
+    IFS=$'\t' read -r rss task root class top btop members <<EOF_ROW
+$row
+EOF_ROW
+    [ "$top" = 1 ] || continue
+    fm_memory_subtree_has_agent "$members" && continue
+    chosen=$row
+    break
   done <"$jobs"
-  rm -f "$jobs"
   if [ -z "$chosen" ]; then
     if [ ! -e "$STATE/.memory-critical-episode" ]; then
       printf '%s\n' "$now" >"$STATE/.memory-critical-episode"
@@ -356,7 +413,7 @@ critical_stop() {  # <now>
     fi
     return 0
   fi
-  IFS=$'\t' read -r rss task root members <<EOF_JOB
+  IFS=$'\t' read -r rss task root class top btop members <<EOF_JOB
 $chosen
 EOF_JOB
   label=$(describe_job "$root")
@@ -364,8 +421,7 @@ EOF_JOB
   printf '%s\n' "$now" >"$SHARED/.memory-critical-last"
   fm_memory_stop_job "$members"
   msg="Memory watchdog: this machine reached ${FM_MEM_USED_PCT}% memory in use, past the ${FM_MEMORY_CRITICAL}% critical line, so I stopped your heaviest job to keep the machine from freezing: '$label' (process $root and its children, about $gb GB). Nothing else of yours was touched. Do not immediately re-run it at full size: re-run it with less parallelism (fewer test or browser workers) or once memory has freed, and report through your status line if it cannot wait."
-  FM_HOME="$FM_HOME" "${FM_MEMORY_SEND_CMD:-$SCRIPT_DIR/fm-send.sh}" "$task" "$msg" </dev/null >/dev/null 2>&1 ||
-    fm_memory_event "$STATE" "$now" "could not deliver the job-stop notice to $task's worker - tell it that '$label' was stopped for memory"
+  notify_worker "$task" "$label" "$now" "$msg"
   fm_memory_event "$STATE" "$now" "critical line: memory reached ${FM_MEM_USED_PCT}% (critical ${FM_MEMORY_CRITICAL}%), so the watchdog stopped $task's heaviest job '$label' (about $gb GB) and told its worker"
 }
 
@@ -383,7 +439,7 @@ room_check() {  # <now>
 }
 
 cmd_tick() {
-  local now
+  local now jobs
   if ! fm_memory_load_config "$CONFIG"; then
     # Keep protecting on the defaults, and say once per bad config why.
     if [ ! -e "$STATE/.memory-config-error" ]; then
@@ -404,11 +460,21 @@ cmd_tick() {
   }
   fm_memory_gate_update "$SHARED" "$now"
   fm_lock_release "$GATE_LOCK"
+  jobs=$(mktemp "${TMPDIR:-/tmp}/fm-memory-jobs.XXXXXX") || jobs=
+  if [ -n "$jobs" ]; then
+    fm_memory_heavy_jobs "$STATE" "$jobs" || : >"$jobs"
+    ceiling_check "$now" "$jobs"
+  fi
   if [ "$FM_MEM_USED_PCT" -ge "$FM_MEMORY_CRITICAL" ]; then
-    critical_stop "$now"
+    # A ceiling stop this tick may already have freed enough; the next tick
+    # re-reads memory before the critical line picks another job.
+    if [ -n "$jobs" ] && [ "${CEILING_STOPPED:-0}" = 0 ]; then
+      critical_stop "$now" "$jobs"
+    fi
   else
     rm -f "$STATE/.memory-critical-episode"
   fi
+  [ -z "$jobs" ] || rm -f "$jobs"
   room_check "$now"
 }
 

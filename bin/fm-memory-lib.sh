@@ -29,7 +29,9 @@
 # needs room for itself: counted + one reservation must stay under close.
 #
 # The critical line compares plain used (no reservations) with critical,
-# because it acts on memory that is really in use.
+# because it acts on memory that is really in use. The job ceilings apply at
+# any memory level: one browser tree above browser_ceiling_mb, or one test-run
+# or terraform job above job_ceiling_mb, is ballooning.
 #
 # Heavy jobs (fm_memory_heavy_jobs). A heavy job is a process whose own argv
 # names a test runner (vitest, jest, playwright, mocha, `node --test`), a
@@ -65,6 +67,8 @@ fm_memory_load_config() {
   FM_MEMORY_CRITICAL=95
   FM_MEMORY_RESERVE_MB=1024
   FM_MEMORY_RESERVE_SECS=180
+  FM_MEMORY_BROWSER_CEILING_MB=1536
+  FM_MEMORY_JOB_CEILING_MB=3072
   FM_MEMORY_CONFIG_ERROR=
   file="$dir/memory-gate"
   [ -e "$file" ] || [ -L "$file" ] || return 0
@@ -74,6 +78,7 @@ fm_memory_load_config() {
   fi
   local close=$FM_MEMORY_CLOSE reopen=$FM_MEMORY_REOPEN critical=$FM_MEMORY_CRITICAL
   local reserve_mb=$FM_MEMORY_RESERVE_MB reserve_secs=$FM_MEMORY_RESERVE_SECS enabled=1
+  local browser_ceiling_mb=$FM_MEMORY_BROWSER_CEILING_MB job_ceiling_mb=$FM_MEMORY_JOB_CEILING_MB
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line%%#*}
     line=$(printf '%s' "$line" | tr -d '[:space:]')
@@ -97,9 +102,9 @@ fm_memory_load_config() {
         esac
         continue
         ;;
-      close | reopen | critical | reserve_mb | reserve_secs) ;;
+      close | reopen | critical | reserve_mb | reserve_secs | browser_ceiling_mb | job_ceiling_mb) ;;
       *)
-        FM_MEMORY_CONFIG_ERROR="config/memory-gate has unknown key '$key' (known: enabled, close, reopen, critical, reserve_mb, reserve_secs)"
+        FM_MEMORY_CONFIG_ERROR="config/memory-gate has unknown key '$key' (known: enabled, close, reopen, critical, reserve_mb, reserve_secs, browser_ceiling_mb, job_ceiling_mb)"
         return 1
         ;;
     esac
@@ -115,6 +120,8 @@ fm_memory_load_config() {
       critical) critical=$value ;;
       reserve_mb) reserve_mb=$value ;;
       reserve_secs) reserve_secs=$value ;;
+      browser_ceiling_mb) browser_ceiling_mb=$value ;;
+      job_ceiling_mb) job_ceiling_mb=$value ;;
     esac
   done <"$file"
   if [ "$reopen" -ge "$close" ] || [ "$close" -ge "$critical" ] || [ "$critical" -gt 100 ]; then
@@ -127,6 +134,8 @@ fm_memory_load_config() {
   FM_MEMORY_CRITICAL=$critical
   FM_MEMORY_RESERVE_MB=$reserve_mb
   FM_MEMORY_RESERVE_SECS=$reserve_secs
+  FM_MEMORY_BROWSER_CEILING_MB=$browser_ceiling_mb
+  FM_MEMORY_JOB_CEILING_MB=$job_ceiling_mb
   return 0
 }
 
@@ -380,11 +389,16 @@ fm_memory_argv_is_agent() {
 }
 
 # fm_memory_argv_is_heavy: true when the last-read argv is a heavy job
-# (header). Only argv[0..2] are read.
+# (header), setting FM_MEM_CLASS to browser or runner (test runners and
+# terraform). Only argv[0..2] are read.
 fm_memory_argv_is_heavy() {
   local a0=${FM_MEM_A0##*/} arg base
+  FM_MEM_CLASS=runner
   case "$a0" in
-    chrome | chromium | chromium-browser | google-chrome* | chrome-headless-shell | headless_shell | msedge | microsoft-edge*) return 0 ;;
+    chrome | chromium | chromium-browser | google-chrome* | chrome-headless-shell | headless_shell | msedge | microsoft-edge*)
+      FM_MEM_CLASS=browser
+      return 0
+      ;;
     terraform) return 0 ;;
     vitest | jest | playwright | mocha) return 0 ;;
     node | nodejs | bun | deno)
@@ -428,7 +442,10 @@ fm_memory_task_worktrees() {
 }
 
 # fm_memory_heavy_jobs <state-dir> <out-file>: write one line per heavy job,
-# largest first: "rss_kb<TAB>task<TAB>root_pid<TAB>member_pids(space-separated)".
+# largest first: "rss_kb<TAB>task<TAB>root_pid<TAB>class<TAB>top<TAB>btop<TAB>
+# member_pids(space-separated)". class is browser or runner; top is 1 for a
+# job's topmost heavy process (the critical line's candidates); btop is 1 for a
+# topmost browser process, whose tree the browser ceiling measures alone.
 fm_memory_heavy_jobs() {
   local state=$1 out=$2 proc tmpd pid task
   proc=$(fm_memory_proc_root)
@@ -463,7 +480,7 @@ fm_memory_heavy_jobs() {
     fm_memory_argv "$pid" || continue
     fm_memory_argv_is_heavy || continue
     fm_memory_argv_is_agent && continue
-    printf '%s\t%s\n' "$pid" "$task" >>"$tmpd/heavy"
+    printf '%s\t%s\t%s\n' "$pid" "$task" "$FM_MEM_CLASS" >>"$tmpd/heavy"
   done <"$tmpd/owned"
   if [ -s "$tmpd/heavy" ]; then
     awk -F '\t' -v tbl="$tmpd/table" '
@@ -473,7 +490,7 @@ fm_memory_heavy_jobs() {
           kids[f[2]] = kids[f[2]] " " f[1]
         }
       }
-      { heavy[$1] = $2; order[++h] = $1 }
+      { heavy[$1] = $2; class[$1] = $3; order[++h] = $1 }
       function walk(p,   i, c, parts) {
         members = members " " p; total += rss[p]
         c = split(kids[p], parts, " ")
@@ -483,19 +500,23 @@ fm_memory_heavy_jobs() {
         for (i = 1; i <= h; i++) {
           p = order[i]
           if (!(p in rss)) continue
-          # A job is its topmost heavy process: skip one with a heavy
-          # ancestor recorded for the same task.
-          nested = 0; q = parent[p]; depth = 0
+          # A job is its topmost heavy process (top); a browser tree is also
+          # measured on its own from its topmost browser process (btop), so a
+          # browser inside a test run meets the browser ceiling by itself.
+          top = 1; btop = (class[p] == "browser"); q = parent[p]; depth = 0
           while (q != "" && q != "0" && depth++ < 256) {
-            if ((q in heavy) && heavy[q] == heavy[p]) { nested = 1; break }
+            if ((q in heavy) && heavy[q] == heavy[p]) {
+              top = 0
+              if (class[q] == "browser") btop = 0
+            }
             if (!(q in parent)) break
             q = parent[q]
           }
-          if (nested) continue
+          if (!top && !btop) continue
           members = ""; total = 0
           walk(p)
           sub(/^ /, "", members)
-          printf "%d\t%s\t%s\t%s\n", total, heavy[p], p, members
+          printf "%d\t%s\t%s\t%s\t%d\t%d\t%s\n", total, heavy[p], p, class[p], top, btop, members
         }
       }
     ' "$tmpd/heavy" | sort -t "$(printf '\t')" -k1,1nr >"$out"

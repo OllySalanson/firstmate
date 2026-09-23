@@ -217,7 +217,13 @@ test_ship_modes_generate_clean_briefs() {
     assert_grep "mid-task \`working:\` line (including setup complete) is nonterminal" "$brief" \
       "$id: brief missing nonterminal working:/setup-complete gate protection"
     assert_no_grep "EOF" "$brief" "$id: brief leaked a heredoc EOF marker (unterminated heredoc)"
+    assert_grep "run one headless browser at a time, close it between screenshots, use a small viewport" "$brief" \
+      "$id: brief missing the keep-memory-small guidance"
   done
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-scout-mem-a4 some-proj --scout >/dev/null 2>&1 \
+    || fail "a scout brief failed to scaffold"
+  assert_grep "memory watchdog stops any single browser tree or test job" "$home/data/brief-scout-mem-a4/brief.md" \
+    "scout brief missing the keep-memory-small guidance"
   pass "fm-brief.sh: no-mistakes/direct-PR/local-only briefs generate cleanly"
 }
 

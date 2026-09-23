@@ -474,6 +474,11 @@ When memory in use reaches the critical line (default 95%), the watchdog stops t
 It tells that task's worker through `bin/fm-send.sh` what was stopped and why, and reports the stop to firstmate.
 It never stops a worker agent or anything outside a recorded task's process tree, and it waits a short cooldown before stopping another job.
 
+Job ceilings stop a ballooning job early, even while total memory is fine.
+One headless browser tree above its ceiling (default 1.5 GB), or one test-run or terraform job above its ceiling (default 3 GB), is stopped and its worker told why, under the same agent and process-tree limits as the critical line.
+A browser inside a test run is measured by itself, so only the browser is stopped.
+Ship and scout briefs (`bin/fm-brief.sh`) tell workers to keep one headless browser at a time, close it between screenshots, use a small viewport, and cap test-runner workers.
+
 `config/flagship` is optional, local, and gitignored, and holds one project name matching the backlog's `repo:` field; set it with `bin/fm-memory-watchdog.sh flagship <project>` and clear it with `--clear`.
 It is a per-session choice of this home, so it is not inherited by secondmate homes.
 
@@ -486,13 +491,15 @@ reopen=70         # percent counted memory below which a closed gate reopens
 critical=95       # percent memory in use that stops the largest heavy job
 reserve_mb=1024   # memory counted for each just-admitted worker
 reserve_secs=180  # how long a just-admitted worker stays reserved
-enabled=on        # off admits every spawn and disables the critical stop
+browser_ceiling_mb=1536  # one headless browser tree above this is stopped
+job_ceiling_mb=3072      # one test-run or terraform job above this is stopped
+enabled=on        # off admits every spawn and disables the critical stop and the ceilings
 ```
 
 Values must satisfy `reopen < close < critical <= 100`.
 A malformed file makes every spawn refuse with the reason, while the watchdog loop keeps protecting on the defaults and reports the problem once.
 
-`bin/fm-memory-watchdog.sh status` prints the gate, memory in use, reservations, the lines, the flagship, deferred work, whether the watchdog loop is running, and its recent events.
+`bin/fm-memory-watchdog.sh status` prints the gate, memory in use, reservations, the lines, the job ceilings, the flagship, deferred work, whether the watchdog loop is running, and its recent events.
 The gate records are machine-wide, kept in the local root home's `state/`, so every home on one machine shares one gate; deferred work and events stay in each home.
 The watchdog's detached loop is started and kept alive by the watcher and by each spawn, ticks every few seconds so it keeps protecting while the watcher waits for firstmate's next turn, and exits by itself once the home has no task records and no deferred work.
 The script's header owns the exact commands, records, and tuning variables.

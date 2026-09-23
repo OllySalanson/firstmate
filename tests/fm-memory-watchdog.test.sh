@@ -396,6 +396,54 @@ test_spawn_defers_and_overrides() {
   pass "fm-spawn defers a fresh spawn over the gate, admits it on --memory-override, and never gates relaunch"
 }
 
+test_browser_ceiling_stops_a_ballooning_browser_alone() {
+  local wt="$TMP_ROOT/ceiling/wt" runner browser renderer small out sent
+  new_case ceiling
+  task_meta t4 "$wt"
+  set_mem 40
+  sleeper; runner=$LAST_SLEEPER
+  sleeper; browser=$LAST_SLEEPER
+  sleeper; renderer=$LAST_SLEEPER
+  sleeper; small=$LAST_SLEEPER
+  # A screenshot run: a test runner whose own browser balloons.
+  fake_proc "$runner" 1 $((GB / 2)) "$wt" node "$wt/node_modules/@playwright/test/cli.js" test
+  fake_proc "$browser" "$runner" $((GB / 2)) "$wt" /opt/ms-playwright/chrome-linux/headless_shell --headless
+  fake_proc "$renderer" "$browser" $((3 * GB / 2)) / /opt/ms-playwright/chrome-linux/headless_shell --type=renderer
+  # A second, modest browser in the same local copy stays.
+  fake_proc "$small" 1 $((GB / 2)) "$wt" chromium --headless
+  wd tick
+  sleep 0.3
+  kill -0 "$browser" 2>/dev/null && fail "a browser tree over its ceiling survived at 40% memory"
+  kill -0 "$renderer" 2>/dev/null && fail "the ballooning renderer survived"
+  kill -0 "$runner" 2>/dev/null || fail "the test runner around the browser was stopped too"
+  kill -0 "$small" 2>/dev/null || fail "a browser under the ceiling was stopped"
+  sent=$(cat "$H/sent.log")
+  assert_contains "$sent" "t4"$'\t'"Memory watchdog: your headless browser grew to about 2.0 GB" "the worker was not told its browser was stopped"
+  assert_contains "$sent" "close it between screenshots, and use a small viewport" "the notice did not say how to stay small"
+  out=$(wd poll)
+  assert_contains "$out" "job ceiling: stopped t4's headless browser 'headless_shell --headless' at about 2.0 GB (ceiling 1.5 GB)" "firstmate was not told of the ceiling stop"
+  pass "one browser tree over its ceiling is stopped early, alone, even while total memory is fine"
+}
+
+test_job_ceiling_stops_an_oversized_test_run() {
+  local wt="$TMP_ROOT/jobceiling/wt" vit ok
+  new_case jobceiling
+  task_meta t5 "$wt"
+  set_mem 30
+  printf 'job_ceiling_mb=2048\n' >"$H/config/memory-gate"
+  sleeper; vit=$LAST_SLEEPER
+  sleeper; ok=$LAST_SLEEPER
+  fake_proc "$vit" 1 $((5 * GB / 2)) "$wt" node "$wt/node_modules/vitest/vitest.mjs" run
+  fake_proc "$ok" 1 $((GB)) "$wt" terraform plan
+  wd tick
+  sleep 0.3
+  kill -0 "$vit" 2>/dev/null && fail "a test run over the job ceiling survived"
+  kill -0 "$ok" 2>/dev/null || fail "a job under the ceiling was stopped"
+  assert_contains "$(cat "$H/sent.log")" "past the 2.0 GB ceiling for one test or terraform job" "the worker was not told about the job ceiling"
+  assert_contains "$(wd status)" "job ceilings: one headless browser tree 1536 MB, one test or terraform job 2048 MB" "status did not show the ceilings"
+  pass "one test run over the configured job ceiling is stopped and its worker told"
+}
+
 test_admission_counts_reservations
 test_reservations_expire
 test_hysteresis
@@ -406,6 +454,8 @@ test_config_validation
 test_critical_stops_largest_heavy_job_only
 test_critical_skips_subtree_holding_an_agent
 test_critical_with_nothing_to_stop_reports_once
+test_browser_ceiling_stops_a_ballooning_browser_alone
+test_job_ceiling_stops_an_oversized_test_run
 test_room_event_for_deferred_work
 test_queue_orders_flagship_first
 test_loop_runs_only_while_work_exists
