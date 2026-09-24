@@ -1,0 +1,11 @@
+session:
+  file: /review.html
+  status: feedback
+prompts[3]:
+  stray: before any item
+  - uid: el-a
+    prompt: first
+    tag: note
+  - uid: el-b
+    prompt: second
+    tag: note

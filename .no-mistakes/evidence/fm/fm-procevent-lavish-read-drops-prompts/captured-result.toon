@@ -1,0 +1,21 @@
+session:
+  file: /review.html
+  status: feedback
+prompts[2]:
+  - uid: "1"
+    prompt: keep the plan but rework the one rejected row
+    selector: "div > table > tbody > tr:nth-of-type(1) > td:nth-of-type(1)"
+    tag: td
+    text: Rejected row label
+    target:
+      type: table-cell
+      selector: "div > table > tbody > tr:nth-of-type(1) > td:nth-of-type(1)"
+      rowLabel: Rejected row label
+      columnLabel: REJECTED
+      text: Rejected row label
+  - uid: ""
+    prompt: "everything else looks right\nship it"
+    selector: ""
+    tag: message
+    text: Freeform message
+next_step: "Apply the requested changes"

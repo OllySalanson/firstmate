@@ -1,0 +1,15 @@
+$ fm-procevent-lavish.sh read captured-result.toon   # BEFORE (base 4e408d8)
+SESSION-ENDING MESSAGE: (none)
+
+declared_items: 0
+presented_items: 0
+malformed_items: 0
+complete: yes
+lifecycle: feedback
+session_ended: (unset)
+annotation_count: 0
+session_ending_message_count: 0
+
+ANNOTATIONS: (none)
+END LAVISH RESULT (0 of 0)
+exit=0

@@ -1,0 +1,33 @@
+$ fm-procevent-lavish.sh read captured-result.toon   # AFTER (53f414a)
+CAPTAIN MESSAGE
+| everything else looks right
+| ship it
+END CAPTAIN MESSAGE
+
+declared_items: 2
+presented_items: 2
+malformed_items: 0
+complete: yes
+lifecycle: feedback
+session_ended: (unset)
+annotation_count: 1
+session_ending_message_count: 1
+
+ANNOTATIONS
+ANNOTATION 1 of 1
+element_uid: 1
+element_selector: div > table > tbody > tr:nth-of-type(1) > td:nth-of-type(1)
+tag: td
+text:
+| Rejected row label
+prompt:
+| keep the plan but rework the one rejected row
+context:
+| target.type: table-cell
+| target.selector: div > table > tbody > tr:nth-of-type(1) > td:nth-of-type(1)
+| target.rowLabel: Rejected row label
+| target.columnLabel: REJECTED
+| target.text: Rejected row label
+END ANNOTATIONS
+END LAVISH RESULT (2 of 2)
+exit=0

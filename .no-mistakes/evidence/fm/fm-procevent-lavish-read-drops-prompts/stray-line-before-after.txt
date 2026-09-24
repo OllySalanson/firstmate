@@ -1,0 +1,10 @@
+# BEFORE review fix (1143a30)
+declared_items: 3
+presented_items: 1
+malformed_items: 2
+complete: no
+# AFTER (53f414a)
+declared_items: 3
+presented_items: 2
+malformed_items: 1
+complete: no
