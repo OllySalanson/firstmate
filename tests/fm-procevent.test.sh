@@ -3198,6 +3198,70 @@ assert_not_contains "$out" $'\nprompt:\n' \
   "a choice row gained a freeform comment field"
 pass "read does not present choice context as a comment"
 
+# Lavish switches to the expanded `prompts[N]:` list form when an item carries a
+# nested object, such as a table-cell target. That shape once read as zero
+# declared items and a complete, empty capture, hiding every answer.
+cat > "$READ" <<'EOF'
+session:
+  file: /review.html
+  status: feedback
+prompts[2]:
+  - uid: "1"
+    prompt: keep the plan but rework the one rejected row
+    selector: "div > table > tbody > tr:nth-of-type(1) > td:nth-of-type(1)"
+    tag: td
+    text: Rejected row label
+    target:
+      type: table-cell
+      selector: "div > table > tbody > tr:nth-of-type(1) > td:nth-of-type(1)"
+      rowLabel: Rejected row label
+      columnLabel: REJECTED
+      text: Rejected row label
+  - uid: ""
+    prompt: "everything else looks right\nship it"
+    selector: ""
+    tag: message
+    text: Freeform message
+next_step: "Apply the requested changes"
+EOF
+out=$(read_out) || fail "read failed on an expanded-list capture"
+assert_contains "$out" "declared_items: 2" "an expanded-list capture lost its declared count"
+assert_contains "$out" "presented_items: 2" "an expanded-list capture dropped queued items"
+assert_contains "$out" "malformed_items: 0" "a well-formed expanded-list capture reported malformed items"
+assert_contains "$out" "complete: yes" "a well-formed expanded-list capture was not complete"
+assert_contains "$out" "annotation_count: 1" "the expanded-list row comment was not an annotation"
+assert_contains "$out" $'CAPTAIN MESSAGE\n| everything else looks right\n| ship it\nEND CAPTAIN MESSAGE' \
+  "the expanded-list freeform message was not its own field"
+assert_contains "$out" "element_uid: 1" "an expanded-list annotation lost its element uid"
+assert_contains "$out" "element_selector: div > table > tbody > tr:nth-of-type(1) > td:nth-of-type(1)" \
+  "an expanded-list annotation lost its quoted selector"
+assert_contains "$out" "tag: td" "an expanded-list annotation lost its tag"
+assert_contains "$out" $'prompt:\n| keep the plan but rework the one rejected row' \
+  "an expanded-list row comment was dropped"
+assert_contains "$out" "| target.columnLabel: REJECTED" "an expanded-list annotation lost its table-cell target"
+assert_not_contains "$out" "next_step" "a top-level key after the list was read as an item"
+pass "read presents every item of an expanded-list capture"
+
+cat > "$READ" <<'EOF'
+session:
+  file: /review.html
+  status: feedback
+prompts[2]:
+  - uid: el-a
+    prompt: ""
+    selector: section#a
+    tag: note
+    text: Valid item
+  - uid: el-b
+   tag: misaligned
+EOF
+out=$(read_out) || fail "read failed on an expanded-list capture with a malformed item"
+assert_contains "$out" "presented_items: 1" "a malformed expanded-list item was presented"
+assert_contains "$out" "malformed_items: 1" "a malformed expanded-list item was not reported"
+assert_contains "$out" "complete: no" "a malformed expanded-list capture was certified complete"
+assert_contains "$out" "| Valid item" "a valid item beside a malformed expanded-list item was dropped"
+pass "read never certifies a malformed expanded-list item as complete"
+
 cat > "$READ" <<'EOF'
 session:
   file: /review.html
