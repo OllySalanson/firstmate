@@ -60,17 +60,12 @@
 # The window is FMX_FOLLOWUP_MAX_AGE_SECS (default 604800, 7 days). The cap is
 # FMX_FOLLOWUP_MAX_COUNT (default 3). FMX_NOW_OVERRIDE pins "now" for
 # deterministic tests. Meta read/write lives in fm-x-lib.sh.
-[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-# shellcheck source=bin/fm-x-lib.sh
-. "$SCRIPT_DIR/fm-x-lib.sh"
-# shellcheck source=bin/fm-wake-lib.sh
-. "$SCRIPT_DIR/fm-wake-lib.sh"
 
 usage() {
   echo "usage: fm-x-followup.sh --check <task-id> | --clear <task-id> [--expect-request <request-id>] | <task-id> [--image <path>] [--final] --text-file <path> | <task-id> [--image <path>] [--final] -" >&2
@@ -100,6 +95,15 @@ Options:
 EOF
 }
 
+case "${1:-}" in
+  --help|-h) help; exit 0 ;;
+esac
+
+# shellcheck source=bin/fm-x-lib.sh
+. "$SCRIPT_DIR/fm-x-lib.sh"
+# shellcheck source=bin/fm-wake-lib.sh
+. "$SCRIPT_DIR/fm-wake-lib.sh"
+
 MAX_AGE=${FMX_FOLLOWUP_MAX_AGE_SECS:-604800}
 case "$MAX_AGE" in
   ''|*[!0-9]*) MAX_AGE=604800 ;;
@@ -115,10 +119,6 @@ esac
 # source (--text-file <path> | -) deferred until after the link/window/cap
 # check so a missing or exhausted link never consumes stdin or posts.
 MODE=post
-case "${1:-}" in
-  --help|-h) help; exit 0 ;;
-esac
-
 FINAL=0
 EXPECT_REQUEST_SET=0
 EXPECT_REQUEST=
