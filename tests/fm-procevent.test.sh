@@ -3266,6 +3266,26 @@ cat > "$READ" <<'EOF'
 session:
   file: /review.html
   status: feedback
+prompts[3]:
+  stray: before any item
+  - uid: el-a
+    prompt: first
+    tag: note
+  - uid: el-b
+    prompt: second
+    tag: note
+EOF
+out=$(read_out) || fail "read failed on an expanded-list capture with a stray leading line"
+assert_contains "$out" "presented_items: 2" "a stray leading line dropped the first valid expanded-list item"
+assert_contains "$out" "malformed_items: 1" "a stray leading line was not counted as exactly one malformed entry"
+assert_contains "$out" "complete: no" "a stray leading line was certified complete"
+assert_contains "$out" $'prompt:\n| first' "the first item after a stray leading line was not presented"
+pass "a stray line before the first expanded-list item counts once"
+
+cat > "$READ" <<'EOF'
+session:
+  file: /review.html
+  status: feedback
   session_ended: true
   ended_by: user
 prompts[1]{uid,prompt,selector,tag,text}:

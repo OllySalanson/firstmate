@@ -720,8 +720,7 @@ cmd_read() {
           $depth = $base + 2;
           next unless length $body;
         } elsif (!$item || $depth < $base + 2) {
-          $malformed++ unless $item;
-          $bad = 1;
+          if ($item) { $bad = 1 } else { $malformed++ }
           next;
         }
         pop @stack while @stack > 1 && $stack[-1][0] > $depth;
