@@ -1,0 +1,13 @@
+ok - real tmux: fm_backend_tmux_create_task creates a window and refuses a duplicate
+ok - real tmux: fm_backend_tmux_send_text_line sends literal text and submits with Enter
+ok - real tmux: fm_backend_tmux_send_literal + fm_backend_tmux_send_key Enter submit as two separate steps
+ok - real tmux: fm_backend_tmux_capture's -S -N bound trims old history for a small window and reaches it for a large one
+ok - real tmux: fm_backend_tmux_resolve_bare_selector (list-live) finds the created window by name
+ok - real tmux: fm_backend_tmux_resolve_bare_selector fails for a window that does not exist
+ok - real tmux: a missing window reads missing while a sibling window is active
+ok - real tmux: an absent window is never reached through a prefix-matching neighbor
+ok - real tmux: a window whose name contains a dot is addressed exactly
+ok - real tmux: a dead task window named <sibling>.0 reads missing, never as its live sibling's pane
+ok - real tmux: an operator session:window.pane override reaches that exact pane, and recorded targets never read it
+ok - real tmux: an existing window named like window.pane wins over the operator pane selector
+ok - real tmux: kill removes the window and the readable session inventory authoritatively classifies it missing

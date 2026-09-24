@@ -1,0 +1,23 @@
+$ tmux list-windows -t firstmate   # after crash: two worker windows are gone
+0: main
+1: fm-renew-m6-apply (active)
+
+$ tmux display-message -p -t firstmate:fm-eptw-verified-stats "#{window_name}"   # raw probe the old code used
+fm-renew-m6-apply
+exit=0
+
+=== BEFORE (base e24ba46): bin/fm-session-start.sh FLEET STATE endpoint lines ===
+--- eptw-verified-stats ---
+endpoint: alive (backend=tmux window=firstmate:fm-eptw-verified-stats)
+--- lost-two ---
+endpoint: alive (backend=tmux window=firstmate:fm-lost-two)
+--- renew-m6-apply ---
+endpoint: alive (backend=tmux window=firstmate:fm-renew-m6-apply)
+
+=== AFTER (target b73bacf): bin/fm-session-start.sh FLEET STATE endpoint lines ===
+--- eptw-verified-stats ---
+endpoint: dead (backend=tmux window=firstmate:fm-eptw-verified-stats)
+--- lost-two ---
+endpoint: dead (backend=tmux window=firstmate:fm-lost-two)
+--- renew-m6-apply ---
+endpoint: alive (backend=tmux window=firstmate:fm-renew-m6-apply)
