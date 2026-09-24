@@ -23,7 +23,7 @@ entrypoints() {
 }
 
 test_every_entrypoint_answers_help_without_side_effects() {
-  local f flag scratch out code count=0
+  local f flag scratch out code left count=0
   while IFS= read -r f; do
     for flag in --help -h; do
       scratch="$TMP_ROOT/$(basename "$f" .sh)$flag"
@@ -32,7 +32,8 @@ test_every_entrypoint_answers_help_without_side_effects() {
       out=$(cd "$scratch" && HOME="$scratch" FM_HOME="$scratch" timeout 20 "$f" "$flag" </dev/null 2>/dev/null) || code=$?
       expect_code 0 "$code" "$(basename "$f") $flag"
       [ -n "$out" ] || fail "$(basename "$f") $flag printed no usage on stdout"
-      [ -z "$(ls -A "$scratch")" ] || fail "$(basename "$f") $flag created $(ls -A "$scratch" | tr '\n' ' ')"
+      left=$(find "$scratch" -mindepth 1 -maxdepth 1 -exec basename {} \; | tr '\n' ' ')
+      [ -z "$left" ] || fail "$(basename "$f") $flag created $left"
     done
     count=$((count + 1))
   done < <(entrypoints)
