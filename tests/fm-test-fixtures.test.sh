@@ -201,9 +201,9 @@ SH
   case "$leftover" in ''|*[!0-9]*) fail "the probe did not start its leftover server" ;; esac
   ! kill -0 "$leftover" 2>/dev/null || fail "the runner left a suite's tmux server running (pid $leftover)"
 
+  # Expansion is intentionally deferred to the child bash.
+  # shellcheck disable=SC2016
   TMUX="$host_sock,$host_pid,0" TMUX_PANE=%0 TMUX_TMPDIR="$host_dir" \
-    # Expansion is intentionally deferred to the child bash.
-    # shellcheck disable=SC2016
     env -u FM_TEST_TMUX_TMPDIR -u FM_TEST_LIB_SOURCED bash -c '
       . "$1"
       [ -z "${TMUX+x}" ] || fail "tests/lib.sh kept TMUX"
