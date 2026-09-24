@@ -76,19 +76,18 @@ fm_tmux_strip_ghost() { fm_composer_strip_ghost; }
 # in that same listing, so the value can never come from a pane other than the
 # one matched.
 #
-# Accepted targets: `%<pane-id>`, `@<window-id>`, `<session>`,
-# `<session>:<window>`, and `<session>:<window>.<pane-index>`, where session is
-# a name (optionally `=`-prefixed) or a `$<session-id>`, and window is a name
-# (optionally `=`-prefixed), a numeric index (tried before a window of that
-# name, as tmux does), or `@<window-id>`. A window target reads that window's
-# active pane and a bare session its active window's active pane, as tmux means
-# those targets. A window that exists under the full dotted name wins; only
-# when none does is a trailing `.<pane-index>` read as a pane selector. Any
-# other shape reads as absent.
+# Accepted targets: `%<pane-id>`, `@<window-id>`, `<session>`, and
+# `<session>:<window>`, where session is a name (optionally `=`-prefixed) or a
+# `$<session-id>`, and window is a name (optionally `=`-prefixed), a numeric
+# index (tried before a window of that name, as tmux does), or `@<window-id>`.
+# A window target reads that window's active pane and a bare session its active
+# window's active pane, as tmux means those targets. Any other shape reads as
+# absent; a `.pane` suffix is part of the window name, never a pane selector,
+# so a dead `fm-x.0` task window can never read as pane 0 of a live `fm-x`.
+# Operator-typed `window.pane` overrides go through fm_tmux_operator_target.
 fm_tmux_pane_read() {  # <target> <format>
   local target=${1-} format=${2-} tab scope lookup session='' window='' rows
-  local sid sname pid wid widx wname wact pact pidx value index_hit=0 index_value='' name_hit=0 name_value=''
-  local split_window='' split_pane='' split_hit=0 split_value='' split_name_hit=0 split_name_value=''
+  local sid sname pid wid widx wname wact pact value index_hit=0 index_value='' name_hit=0 name_value=''
   tab=$(printf '\t')
   case "$target" in
     %*|@*)
@@ -120,19 +119,12 @@ fm_tmux_pane_read() {  # <target> <format>
         @*) scope=''; lookup=$window ;;
         *[!0-9]*) scope=''; lookup="$lookup=$window" ;;
       esac
-      case "$window" in
-        ?*.*)
-          split_window=${window%.*}
-          split_pane=${window##*.}
-          case "$split_pane" in ''|*[!0-9]*) split_window='' ;; esac
-          ;;
-      esac
       ;;
   esac
   # Every free-text field carries a leading `=` so an empty value cannot make
   # `read` collapse adjacent tab separators and shift the fields.
-  rows=$(tmux list-panes ${scope:+"$scope"} -t "$lookup" -F "#{session_id}$tab=#{session_name}$tab#{pane_id}$tab#{window_id}$tab#{window_index}$tab=#{window_name}$tab#{window_active}$tab#{pane_active}$tab#{pane_index}$tab=$format" 2>/dev/null) || return 1
-  while IFS=$tab read -r sid sname pid wid widx wname wact pact pidx value; do
+  rows=$(tmux list-panes ${scope:+"$scope"} -t "$lookup" -F "#{session_id}$tab=#{session_name}$tab#{pane_id}$tab#{window_id}$tab#{window_index}$tab=#{window_name}$tab#{window_active}$tab#{pane_active}$tab=$format" 2>/dev/null) || return 1
+  while IFS=$tab read -r sid sname pid wid widx wname wact pact value; do
     sname=${sname#=}
     wname=${wname#=}
     value=${value#=}
@@ -152,15 +144,6 @@ fm_tmux_pane_read() {  # <target> <format>
       '$'*) [ "$sid" = "$session" ] || continue ;;
       *) [ "$sname" = "$session" ] || continue ;;
     esac
-    if [ -n "$split_window" ] && [ "$pidx" = "$split_pane" ]; then
-      if [ "$wid" = "$split_window" ] || [ "$widx" = "$split_window" ]; then
-        split_hit=1
-        split_value=$value
-      elif [ "$wname" = "$split_window" ] && [ "$split_name_hit" -eq 0 ]; then
-        split_name_hit=1
-        split_name_value=$value
-      fi
-    fi
     [ "$pact" = 1 ] || continue
     if [ -z "$window" ]; then
       [ "$wact" = 1 ] || continue
@@ -185,14 +168,6 @@ EOF
     printf '%s\n' "$name_value"
     return 0
   fi
-  if [ "$split_hit" -eq 1 ]; then
-    printf '%s\n' "$split_value"
-    return 0
-  fi
-  if [ "$split_name_hit" -eq 1 ]; then
-    printf '%s\n' "$split_name_value"
-    return 0
-  fi
   return 1
 }
 
@@ -207,6 +182,41 @@ fm_tmux_exact_pane() {  # <target>
     %*) printf '%s\n' "$pane" ;;
     *) return 1 ;;
   esac
+}
+
+# fm_tmux_operator_target: the target to use for an operator-typed override
+# (FM_SUPERVISOR_TARGET, an explicit fm-send target), or return 1 when it names
+# no live pane. A target the exact resolver accepts is printed unchanged. Only
+# then is a standard `<session>:<window>.<pane-index>` read as tmux means it,
+# and printed as the `%<pane-id>` of that exact pane. Recorded task targets
+# never come here: a dead dotted task window must read dead, not as a pane of
+# a live sibling window.
+fm_tmux_operator_target() {  # <target>
+  local target=${1-} window pane_index window_id tab idx pane
+  if fm_tmux_exact_pane "$target" >/dev/null; then
+    printf '%s\n' "$target"
+    return 0
+  fi
+  case "$target" in
+    %*|@*|*:*:*) return 1 ;;
+    ?*:*?.*) ;;
+    *) return 1 ;;
+  esac
+  window=${target%.*}
+  pane_index=${target##*.}
+  case "$pane_index" in ''|*[!0-9]*) return 1 ;; esac
+  window_id=$(fm_tmux_pane_read "$window" '#{window_id}') || return 1
+  case "$window_id" in @*) ;; *) return 1 ;; esac
+  tab=$(printf '\t')
+  while IFS=$tab read -r idx pane; do
+    [ "$idx" = "$pane_index" ] || continue
+    case "$pane" in
+      %*) printf '%s\n' "$pane"; return 0 ;;
+    esac
+  done <<EOF
+$(tmux list-panes -t "$window_id" -F "#{pane_index}$tab#{pane_id}" 2>/dev/null)
+EOF
+  return 1
 }
 
 # --- tmux composer capture and capability primitives ------------------------

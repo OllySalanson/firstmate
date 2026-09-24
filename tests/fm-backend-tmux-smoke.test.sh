@@ -231,43 +231,80 @@ wait_for_capture_text "$SESSION:$DOTTED" "dotted-reached" \
   || fail "text for a dotted window did not reach it"
 pass "real tmux: a window whose name contains a dot is addressed exactly"
 
+SIBLING="fm-smoke-rel-v2"
+DOTTED_SIBLING="$SIBLING.0"
+fm_backend_tmux_create_task "$SESSION" "$SIBLING" "$HOME" >/dev/null \
+  || fail "could not create the live sibling window"
+fm_backend_tmux_create_task "$SESSION" "$DOTTED_SIBLING" "$HOME" >/dev/null \
+  || fail "could not create the dotted task window"
+SIBLING_PANE=$(tmux list-panes -s -t "=$SESSION:" -F '#{window_name} #{pane_id}' | awk -v n="$SIBLING" '$1 == n { print $2 }')
+DOTTED_SIBLING_PANE=$(tmux list-panes -s -t "=$SESSION:" -F '#{window_name} #{pane_id}' | awk -v n="$DOTTED_SIBLING" '$1 == n { print $2 }')
+[ -n "$SIBLING_PANE" ] && [ -n "$DOTTED_SIBLING_PANE" ] || fail "could not read the sibling windows' panes"
+pane=$(fm_tmux_exact_pane "$SESSION:$DOTTED_SIBLING") || fail "the live dotted task window read as missing"
+[ "$pane" = "$DOTTED_SIBLING_PANE" ] || fail "the dotted task window resolved to '$pane', expected '$DOTTED_SIBLING_PANE'"
+tmux kill-pane -t "$DOTTED_SIBLING_PANE" || fail "could not kill the dotted task window"
+raw=$(tmux display-message -p -t "$SESSION:$DOTTED_SIBLING" '#{pane_id}') || raw=
+[ "$raw" = "$SIBLING_PANE" ] \
+  || fail "precondition: raw tmux was expected to read the dead '$DOTTED_SIBLING' as pane 0 of '$SIBLING', got '$raw'"
+if fm_backend_target_exists tmux "$SESSION:$DOTTED_SIBLING"; then
+  fail "a dead dotted task window read as existing through its sibling's pane 0"
+fi
+state=$(fm_backend_agent_state tmux "$SESSION:$DOTTED_SIBLING")
+[ "$state" = missing ] || fail "a dead dotted task window should classify missing, got '$state'"
+if fm_backend_capture tmux "$SESSION:$DOTTED_SIBLING" 5 >/dev/null 2>&1; then
+  fail "capture succeeded for a dead dotted task window"
+fi
+if fm_backend_tmux_send_text_line "$SESSION:$DOTTED_SIBLING" "printf 'misrouted-%s\\n' sibling" 2>/dev/null; then
+  fail "send_text_line succeeded for a dead dotted task window"
+fi
+sleep 0.3
+case "$(tmux capture-pane -p -t "$SIBLING_PANE")" in
+  *misrouted-sibling*) fail "text for a dead dotted task window was typed into its sibling" ;;
+esac
+pass "real tmux: a dead task window named <sibling>.0 reads missing, never as its live sibling's pane"
+
 SPLIT_PANE=$(tmux split-window -d -P -F '#{pane_id}' -t "=$SESSION:=$WINDOW") \
   || fail "could not split the task window"
 ACTIVE_PANE=$(fm_tmux_exact_pane "$TARGET") || fail "the split task window read as missing"
 [ "$ACTIVE_PANE" != "$SPLIT_PANE" ] || fail "precondition: the split pane was expected to stay inactive"
 WINDOW_INDEX=$(fm_tmux_pane_read "$TARGET" '#{window_index}') || fail "could not read the task window index"
-pane=$(fm_tmux_exact_pane "$SESSION:$WINDOW.1") || fail "a live session:window.pane target read as missing"
-[ "$pane" = "$SPLIT_PANE" ] || fail "session:window.pane resolved to '$pane', expected '$SPLIT_PANE'"
-pane=$(fm_tmux_exact_pane "$SESSION:$WINDOW_INDEX.1") || fail "a live session:index.pane target read as missing"
-[ "$pane" = "$SPLIT_PANE" ] || fail "session:index.pane resolved to '$pane', expected '$SPLIT_PANE'"
-pane=$(fm_tmux_exact_pane "$SESSION:$WINDOW.0") || fail "session:window.0 read as missing"
-[ "$pane" = "$ACTIVE_PANE" ] || fail "session:window.0 resolved to '$pane', expected '$ACTIVE_PANE'"
-fm_backend_target_exists tmux "$SESSION:$WINDOW.1" || fail "target_exists refused a live session:window.pane target"
+for override in "$SESSION:$WINDOW.1" "$SESSION:$WINDOW_INDEX.1"; do
+  pane=$(fm_backend_operator_target tmux "$override") || fail "a live operator override '$override' read as missing"
+  [ "$pane" = "$SPLIT_PANE" ] || fail "operator override '$override' resolved to '$pane', expected '$SPLIT_PANE'"
+done
+pane=$(fm_backend_operator_target tmux "$SESSION:$WINDOW.0") || fail "operator override window.0 read as missing"
+[ "$pane" = "$ACTIVE_PANE" ] || fail "operator override window.0 resolved to '$pane', expected '$ACTIVE_PANE'"
+resolved=$(fm_backend_operator_target tmux "$TARGET") || fail "an exact operator target read as missing"
+[ "$resolved" = "$TARGET" ] || fail "an exact operator target was rewritten to '$resolved'"
 for absent in "$SESSION:$WINDOW.7" "$SESSION:$DEAD.1" "$SESSION:fm-smoke-prefix.1" "$SESSION:$WINDOW_INDEX.7"; do
-  if fm_backend_target_exists tmux "$absent"; then
-    fail "an absent window or pane '$absent' read as existing"
+  if out=$(fm_backend_operator_target tmux "$absent"); then
+    fail "an absent window or pane '$absent' resolved as an operator override to '$out'"
   fi
 done
-fm_backend_tmux_send_text_line "$SESSION:$WINDOW.1" "printf 'split-%s\\n' reached" \
-  || fail "send_text_line failed for a live session:window.pane target"
-wait_for_capture_text "$SPLIT_PANE" "split-reached" || fail "text for session:window.pane did not reach the split pane"
+if fm_backend_target_exists tmux "$SESSION:$WINDOW.1"; then
+  fail "a recorded target was read as window.pane instead of an exact window name"
+fi
+fm_backend_tmux_send_text_line "$(fm_backend_operator_target tmux "$SESSION:$WINDOW.1")" "printf 'split-%s\\n' reached" \
+  || fail "send_text_line failed for a resolved operator window.pane override"
+wait_for_capture_text "$SPLIT_PANE" "split-reached" || fail "text for an operator window.pane override did not reach the split pane"
 case "$(tmux capture-pane -p -t "$ACTIVE_PANE")" in
-  *split-reached*) fail "text for session:window.pane was typed into the window's active pane" ;;
+  *split-reached*) fail "text for an operator window.pane override was typed into the window's active pane" ;;
 esac
-pass "real tmux: a session:window.pane target reaches that exact pane and an absent pane reads missing"
+pass "real tmux: an operator session:window.pane override reaches that exact pane, and recorded targets never read it"
 
 SHADOW="$WINDOW.1"
 fm_backend_tmux_create_task "$SESSION" "$SHADOW" "$HOME" >/dev/null \
   || fail "could not create the window whose name looks like window.pane"
 SHADOW_PANE=$(tmux list-panes -s -t "=$SESSION:" -F '#{window_name} #{pane_id}' | awk -v n="$SHADOW" '$1 == n { print $2 }')
 [ -n "$SHADOW_PANE" ] || fail "could not read the shadowing window's pane"
-pane=$(fm_tmux_exact_pane "$SESSION:$SHADOW") || fail "a live window named like window.pane read as missing"
+resolved=$(fm_backend_operator_target tmux "$SESSION:$SHADOW") || fail "a live window named like window.pane read as missing"
+pane=$(fm_tmux_exact_pane "$resolved") || fail "the operator target for the shadowing window read as missing"
 [ "$pane" = "$SHADOW_PANE" ] \
   || fail "an exact window named '$SHADOW' lost to the window.pane reading: got '$pane', expected '$SHADOW_PANE'"
 tmux kill-pane -t "$SHADOW_PANE" || fail "could not kill the shadowing window"
-pane=$(fm_tmux_exact_pane "$SESSION:$SHADOW") || fail "session:window.pane stopped resolving once the shadowing window died"
-[ "$pane" = "$SPLIT_PANE" ] || fail "session:window.pane resolved to '$pane' after the shadow died, expected '$SPLIT_PANE'"
-pass "real tmux: an existing window named like window.pane wins over the pane selector"
+pane=$(fm_backend_operator_target tmux "$SESSION:$SHADOW") || fail "the operator window.pane override stopped resolving once the shadowing window died"
+[ "$pane" = "$SPLIT_PANE" ] || fail "the operator override resolved to '$pane' after the shadow died, expected '$SPLIT_PANE'"
+pass "real tmux: an existing window named like window.pane wins over the operator pane selector"
 
 # --- kill and recovery-grade missing-window classification ------------------
 

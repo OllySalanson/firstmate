@@ -1635,21 +1635,22 @@ fm_super_main() {
   else
     echo "warn: could not auto-discover supervisor pane (no FM_SUPERVISOR_TARGET, TMUX_PANE, or HERDR_ENV/HERDR_PANE_ID); falling back to '$discovered' — verify this is firstmate's pane" >&2
   fi
-  FM_SUPERVISOR_TARGET="$discovered"
-  local TARGET="$FM_SUPERVISOR_TARGET"
-
   # --- validate supervisor target at startup (a missing target is a typo) ---
   # Dispatches through bin/fm-backend.sh instead of a raw `tmux display-message`
   # probe, so a herdr supervisor pane is checked via the herdr adapter; for
   # backend=tmux the check goes through the exact-pane resolver
-  # (fm_tmux_exact_pane), which reads an absent window or pane as missing.
-  if ! fm_backend_target_exists "$BACKEND" "$TARGET"; then
-    echo "error: supervisor target '$TARGET' does not resolve to a $BACKEND pane; set FM_SUPERVISOR_TARGET" >&2
-    log "startup failed: target '$TARGET' not found (backend=$BACKEND)"
+  # (fm_tmux_exact_pane), which reads an absent window or pane as missing. An
+  # operator `session:window.pane` override is pinned to that pane's id here, so
+  # every later exact read reaches the same pane.
+  local TARGET
+  if ! TARGET=$(fm_backend_operator_target "$BACKEND" "$discovered"); then
+    echo "error: supervisor target '$discovered' does not resolve to a $BACKEND pane; set FM_SUPERVISOR_TARGET" >&2
+    log "startup failed: target '$discovered' not found (backend=$BACKEND)"
     fm_lock_release "$LOCK" 2>/dev/null || true
     rm -f "$PIDFILE" 2>/dev/null || true
     exit 1
   fi
+  FM_SUPERVISOR_TARGET="$TARGET"
 
   local afk_status="off"
   afk_active "$STATE" && afk_status="on"

@@ -940,6 +940,26 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
   esac
 }
 
+# fm_backend_operator_target: the target to use for an operator-typed override
+# (FM_SUPERVISOR_TARGET, an explicit fm-send target), or return 1 when it names
+# no live endpoint on BACKEND. tmux additionally accepts a standard
+# `session:window.pane` there (bin/fm-tmux-lib.sh fm_tmux_operator_target);
+# recorded task targets keep fm_backend_target_exists and never get that
+# reading, so a dead dotted task window cannot read as a sibling's pane.
+fm_backend_operator_target() {  # <backend> <target>
+  local backend=$1 target=$2
+  case "$backend" in
+    tmux)
+      fm_backend_source tmux || return 1
+      fm_tmux_operator_target "$target"
+      ;;
+    *)
+      fm_backend_target_exists "$backend" "$target" || return 1
+      printf '%s\n' "$target"
+      ;;
+  esac
+}
+
 # fm_backend_agent_state: the single recovery-grade agent/endpoint state
 # contract. It is deliberately richer than fm_backend_target_exists's cheap
 # pane-presence read and prints exactly one of:
