@@ -64,6 +64,7 @@ Coordinate any workflow rollback with its required-check names so a retired chec
   It does not make `data/` tracked.
 - Helper scripts in `bin/` are plain bash.
   Each starts with a usage header comment; keep it accurate when you change behavior.
+  Every executable non-library entrypoint must answer `-h` and `--help` with that usage and no side effects, usually by delegating to `bin/fm-help.sh`; `tests/fm-help.test.sh` enforces this.
   Test scripts and helpers in `tests/` are plain bash too.
   `bin/fm-lint.sh` must pass: it is the single owner of the lint definition (the shellcheck file set, config, pinned shellcheck version, pinned actionlint workflow lint, and the backend-purity check rejecting direct Beads CLI calls in core `bin/` scripts).
   CI uses its full canonical partitions; the no-mistakes pre-push gate uses its context-selected default.

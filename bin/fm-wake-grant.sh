@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Record the supervision branch's wake-row ownership under the wake-queue lock.
+# Usage: fm-wake-grant.sh activate <pid> <generation>
+#        fm-wake-grant.sh publish <generation> <row>...
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

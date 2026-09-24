@@ -154,6 +154,7 @@
 # verbatim rather than resolving it, and the pane starts in the registered
 # directory, so only an absolute value names the same store on both sides; a
 # relative one is refused below rather than guessed at.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 # Path resolution here must answer from the filesystem, never from the caller's
 # environment, because the refusals below are the safety property. CDPATH would

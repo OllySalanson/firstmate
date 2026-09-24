@@ -28,6 +28,7 @@
 # POST body stays {request_id}), a "DRY RUN" summary is printed to stderr, and
 # stdout still echoes the request_id with exit 0. Dry-run needs neither a token
 # nor the relay.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -52,6 +52,7 @@
 # and missing prerequisite and cannot admit concurrency. A script that fails
 # only under concurrency must be removed from the candidate set and investigated;
 # this harness never retries a failure into green.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

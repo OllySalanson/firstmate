@@ -9,6 +9,7 @@
 # GitLab, and gerrit-axi for Gerrit, so an upstream checkout needs no extra
 # tooling to follow the first two. The Gerrit branch additionally needs jq,
 # which bin/fm-pr-check.sh refuses to arm a Gerrit watch without.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 LC_ALL=C
 export LC_ALL

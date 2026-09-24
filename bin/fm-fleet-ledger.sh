@@ -51,6 +51,7 @@
 #
 # Exit status: 0 on success or when off, 2 on a usage error, 1 when a record
 # could not be written. Producers ignore a failure so it never changes theirs.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 # Byte semantics for offsets and lengths; jq still reads the text as UTF-8.
 export LC_ALL=C

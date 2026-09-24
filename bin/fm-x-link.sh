@@ -43,6 +43,7 @@
 #
 # Both ids are relay/firstmate slugs that compose a filename, so they are guarded
 # against path traversal even though they come from trusted callers.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

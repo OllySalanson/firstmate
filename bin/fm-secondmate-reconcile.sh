@@ -83,6 +83,7 @@
 # Request prints `requested: <path>` or `not-needed`.
 # Process-requests prints `processed: <count> deferred: <count>` after work and
 # exits 1 when any request remains deferred; an empty queue is silent success.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
