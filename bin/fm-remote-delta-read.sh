@@ -15,6 +15,7 @@
 # unblock any queued command other than another reply long-poll, then publishes
 # that preemption as distinct exit 76. The bin/fm-remote-job-lib.sh header owns
 # that contract.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 
 FM_HOME=${FM_HOME:?FM_HOME is required}

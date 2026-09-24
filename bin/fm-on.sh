@@ -32,6 +32,7 @@
 # is doing, so a legitimately long-but-alive remote command is never falsely
 # killed. FM_SSH_ALIVE_INTERVAL and FM_SSH_ALIVE_COUNT_MAX override the
 # defaults; the worst-case detection window is roughly interval * count.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

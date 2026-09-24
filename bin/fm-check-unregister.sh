@@ -6,6 +6,7 @@
 # not an existing non-symlink directory is refused before removal.
 # Each existing named artifact must be an ordinary single-link file on the
 # state directory's device; only <id>.check.sh and <id>.check-trust are removed.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

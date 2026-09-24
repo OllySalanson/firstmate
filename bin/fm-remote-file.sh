@@ -10,6 +10,7 @@
 # Put is deliberately narrower: it atomically replaces only a backlog handoff
 # scratch file under state/handoff. There is no delete operation and no generic
 # write path; the receiving command owns scratch cleanup after committed ingest.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 
 FM_HOME=${FM_HOME:?FM_HOME is required}

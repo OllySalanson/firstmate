@@ -9,6 +9,7 @@
 # fail closed as documented by that owner. FM_CONFIG_INHERIT_LIVE=1 marks a live
 # convergence push into an already-running home and skips session-scoped items,
 # exactly as the local propagation path does.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

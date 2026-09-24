@@ -10,6 +10,7 @@
 #   fm-install-treehouse.sh <destination-directory>
 #
 # Pins Treehouse v2.0.1, the version exercised by the local real-Herdr suite.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 
 FM_TREEHOUSE_CI_VERSION=2.0.1

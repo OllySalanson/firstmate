@@ -63,6 +63,7 @@
 #     wrote (see WINDOW_CLOSED_EMPTY below)
 # Line framing and size bounding belong to bin/fm-remote-delta-read.sh, which
 # delivers only whole lines and breaks continuity on an over-long one.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

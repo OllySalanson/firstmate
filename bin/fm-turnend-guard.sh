@@ -89,6 +89,7 @@
 #      re-block (budget_account_current_epoch owns that rule), so an inert
 #      hook that leaves the ledger frozen cannot hold the guard in an
 #      unbounded re-block loop below that override.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

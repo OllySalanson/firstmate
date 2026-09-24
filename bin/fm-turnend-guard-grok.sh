@@ -6,6 +6,7 @@
 # that Grok process. Field absence preserves the pre-native one-resume fallback.
 # Invalid or unreadable input starts neither path. Camel case has typed
 # precedence over the legacy snake-case spelling when both are present.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 
 PAYLOAD=$(cat 2>/dev/null || true)

@@ -20,6 +20,7 @@
 # output across runs, environments, and fleet states.
 #
 # Usage: fm-branch-prompt.sh   (stdout is the complete system prompt)
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

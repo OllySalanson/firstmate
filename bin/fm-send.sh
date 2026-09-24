@@ -214,6 +214,7 @@
 # pane. The pause is typed-plane-only; the inbox plane, the shared submit core
 # (used by the away-mode daemon, which only needs "submitted"), and the --key
 # path do not pay it.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 
 FM_SEND_ORIGINAL_ARGS=("$@")

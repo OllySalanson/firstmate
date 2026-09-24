@@ -8,6 +8,7 @@
 # capture (fm-remote-secondmate-control.sh), clamped to that command's
 # 100-line cap. An unreachable host or unreadable endpoint fails loudly naming
 # the host; the local backend adapters are never asked to read a remote target.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

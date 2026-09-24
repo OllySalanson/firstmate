@@ -60,6 +60,7 @@
 # The window is FMX_FOLLOWUP_MAX_AGE_SECS (default 604800, 7 days). The cap is
 # FMX_FOLLOWUP_MAX_COUNT (default 3). FMX_NOW_OVERRIDE pins "now" for
 # deterministic tests. Meta read/write lives in fm-x-lib.sh.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -36,6 +36,7 @@
 # markers; FM_REMOTE_HERDR_GUARD_STOP_WAIT_TENTHS (default 50) bounds the
 # release wait in tenths of a second. Every decision prints one line to
 # stdout, which launchd routes to the agent's log.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 
 SCRIPT_SELF=${BASH_SOURCE[0]}

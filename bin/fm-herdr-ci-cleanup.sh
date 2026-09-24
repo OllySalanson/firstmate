@@ -14,6 +14,7 @@
 # Usage:
 #   fm-herdr-ci-cleanup.sh snapshot <path>
 #   fm-herdr-ci-cleanup.sh teardown <snapshot-path>
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 
 die() {

@@ -20,6 +20,7 @@
 # HTTPS remote carries neither fact, which is why the captain is asked rather
 # than told.
 # Usage: fm-forge-detect.sh <clone-dir>
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 
 DIR=${1:?usage: fm-forge-detect.sh <clone-dir>}

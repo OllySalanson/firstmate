@@ -73,6 +73,7 @@
 # project the pull-request contract the binding exists to prevent.
 # local-only with a forge is refused the same way.
 # Usage: fm-project-mode.sh [--raw|--forge] <project-name>
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

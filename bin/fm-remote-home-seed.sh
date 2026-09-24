@@ -23,6 +23,7 @@
 #
 # Known provisioning failure rolls the registry back. SSH status 255 preserves
 # the route and any newly scaffolded brief because completion is unknown and a same-route rerun converges.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

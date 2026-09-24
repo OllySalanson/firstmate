@@ -21,6 +21,7 @@
 # Examples:
 #   fm-secondmate-report.sh done abcdef0123456789 "audit clean"
 #   fm-secondmate-report.sh --doc done abcdef0123456789 data/x/report.md "see report"
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 
 CALLER_FM_HOME=${FM_HOME:-}

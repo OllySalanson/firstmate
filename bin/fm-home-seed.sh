@@ -30,6 +30,7 @@
 #       Refuse records that operational consumers cannot parse, unavailable or
 #       unsafe registry files when present, non-absolute or unresolvable homes,
 #       duplicate ids or homes, and nested or overlapping homes.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

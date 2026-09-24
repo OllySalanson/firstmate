@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Tracked shell entrypoint for local and fm-on extension binding commands.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 set -o pipefail
 

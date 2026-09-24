@@ -14,6 +14,7 @@
 # for its own backlog or delivered lock whose pid is dead and whose mtime is at
 # least 30 seconds old. No live or uncertain lock is touched. On confirmed
 # receipt the delivered scratch file is removed; no other path is deletable.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

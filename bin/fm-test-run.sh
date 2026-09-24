@@ -145,6 +145,7 @@
 # shared files that map to the suites naming them; a fixture under
 # tests/fixtures/<dir>/ is mapped by that directory instead. Curated family arms
 # above those also name individual tests/ files explicitly.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 
 now_ms() {

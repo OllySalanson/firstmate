@@ -28,6 +28,7 @@
 # sshd exiting and reparenting this process - also cancels the job. The worker
 # then skips or stops the cancelled job instead of running it to completion for
 # nobody.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 
 PROTOCOL=1

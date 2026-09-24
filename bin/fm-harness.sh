@@ -55,6 +55,7 @@
 # detect_own is the single owner of how the two combine; harness_marker and
 # harness_ancestry only report evidence. Record each newly verified env marker
 # in harness_marker, and each newly verified command name in harness_ancestry.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

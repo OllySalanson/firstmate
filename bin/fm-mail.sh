@@ -60,6 +60,7 @@
 # IMAP/SMTP work is delegated to bin/fm-mail.py (imaplib/smtplib, implicit TLS
 # on 993/465). STARTTLS and port 587 are not supported. BODY.PEEK is used on
 # read/poll so mail is never marked seen before firstmate actually answers it.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 
 set -euo pipefail
 

@@ -32,6 +32,7 @@
 # validator). Both watches read every matching account row independently,
 # without combining quotas. A --provider watch restricts those rows to the
 # requested provider; details preserve each row's accountKey when present.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -74,6 +74,7 @@
 # FM_AFK_MODE (away|quiet, default away) declares which mode a `start` entry
 # requests; leave it unset for a plain refresh of an already-running daemon
 # so its current mode is preserved (bin/fm-afk-start.sh fm_afk_flag_write).
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 
 FM_AFK_LAUNCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

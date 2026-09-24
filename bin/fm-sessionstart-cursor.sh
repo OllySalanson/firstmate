@@ -17,6 +17,7 @@
 # session initialization when a sessionStart hook exits 2 (index.js @ 4823085
 # maps it to `{continue:false}`), so a failed session start must reach the agent
 # as digest text it can act on, never as a refusal to open the session.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

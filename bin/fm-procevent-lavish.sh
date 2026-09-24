@@ -130,6 +130,7 @@
 # close that source-side handoff window. Never describe this path as
 # at-least-once, no-loss, or lossless. The only durability this proves is the
 # runner's own: output that reached the runner is stored before it is announced.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

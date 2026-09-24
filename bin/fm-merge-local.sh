@@ -15,6 +15,7 @@
 # this entrypoint is invoked. The lock ends when the fast-forward returns;
 # docs/captain-hold-lifecycle.md owns the accepted merge-to-cleanup residual.
 # Usage: fm-merge-local.sh <task-id>
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

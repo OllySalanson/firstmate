@@ -47,6 +47,7 @@
 # its own Codex login, so an openai-codex candidate reads as unknown quota here
 # and is never selected on this host; its runway is disclosed uncertainty for
 # the agent-side gates, not measured headroom.
+[ "${BASH_SOURCE[0]}" != "$0" ] || case "${1:-}" in -h|--help) exec "$(dirname "${BASH_SOURCE[0]}")/fm-help.sh" "${BASH_SOURCE[0]}" ;; esac
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
