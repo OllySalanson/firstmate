@@ -44,6 +44,14 @@ Verify setup by spawning a small task and confirming its `fm-<id>` window appear
 
 ## Current behavior and safety
 
+### Exact endpoint targeting
+
+Every tmux read, keystroke, and existence check reaches only the exact pane its recorded target names, and an absent window reads as absent.
+tmux's own target resolution cannot give that guarantee: `display-message -t <session>:<window>` answers an absent window from the session's active window and exits 0, the commands that do fail on an absent window still match a window name by prefix, and a dot in a window name is parsed as a pane separator.
+Taken at face value, that fallback made every dead worker window in a live session read alive and let a read or keystroke land in another worker's window.
+`fm_tmux_pane_read` in `bin/fm-tmux-lib.sh` therefore lists the exact session's panes and selects the matching pane by comparing names and ids itself, and every tmux primitive goes through it or through `fm_tmux_exact_pane`.
+The portable regression is the exact-window section of `tests/fm-backend-tmux-smoke.test.sh`, and the observed tmux behavior is recorded in [runtime-backends.md](verification/runtime-backends.md#exact-target-resolution).
+
 ### Agent liveness probe
 
 A target-existence check proves only that the pane exists.

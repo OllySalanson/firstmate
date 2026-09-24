@@ -118,7 +118,10 @@
 #
 # Every selected script runs isolated from the host's global and system Git
 # configuration, including one that sources no test helper of its own;
-# tests/git-config-helpers.sh owns that contract and its limits.
+# tests/git-config-helpers.sh owns that contract and its limits. Each script
+# likewise runs with a private tmux socket directory and no inherited TMUX, so
+# no test can reach the host's real tmux server; tests/tmux-isolation-helpers.sh
+# owns that contract.
 #
 # Family labels, the changed-file map, and production portable-shard composition
 # live in this script only (one owner). The proven-isolated candidate set remains
@@ -1621,6 +1624,11 @@ families_for_changed_path() {
       families_for_test_reference git-config-helpers.sh lib.sh herdr-test-safety.sh \
         || printf '%s\n' "__unmapped__:$path"
       ;;
+    tests/tmux-isolation-helpers.sh|tests/fake-tmux-list-panes.sh)
+      # As above: most suites reach these only through tests/lib.sh.
+      families_for_test_reference "${path#tests/}" lib.sh \
+        || printf '%s\n' "__unmapped__:$path"
+      ;;
     tests/fixtures/*/*)
       # A fixture belongs to whichever suite reads its directory, found by the
       # same reference scan used for shared helpers. Keyed on the directory
@@ -2402,24 +2410,33 @@ run_script_bounded() {  # <script> <out> <stream> <id>
   local rc
   : "$id"
   set +e
-  if [ "$stream" -eq 1 ]; then
-    if [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ]; then
-      # Expansion is intentionally deferred to the child bash passed to -c.
-      # shellcheck disable=SC2016
-      fm_run_timed "$PER_SCRIPT_TIMEOUT_SECS" bash -c \
-        'bash "$1" 2>&1 | tee "$2"; exit "${PIPESTATUS[0]}"' _ "$script" "$out"
+  # A subshell, because unsetting an inherited TMUX inside a function still
+  # leaves it in every child's environment.
+  (
+    # shellcheck source=tests/tmux-isolation-helpers.sh
+    . "$ROOT/tests/tmux-isolation-helpers.sh" || exit 1
+    trap fm_test_tmux_isolation_cleanup EXIT
+    if [ "$stream" -eq 1 ]; then
+      if [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ]; then
+        # Expansion is intentionally deferred to the child bash passed to -c.
+        # shellcheck disable=SC2016
+        fm_run_timed "$PER_SCRIPT_TIMEOUT_SECS" bash -c \
+          'bash "$1" 2>&1 | tee "$2"; exit "${PIPESTATUS[0]}"' _ "$script" "$out"
+        rc=$?
+      else
+        bash "$script" 2>&1 | tee "$out"
+        rc=${PIPESTATUS[0]}
+      fi
+    elif [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ]; then
+      fm_run_timed "$PER_SCRIPT_TIMEOUT_SECS" bash "$script" >"$out" 2>&1
       rc=$?
     else
-      bash "$script" 2>&1 | tee "$out"
-      rc=${PIPESTATUS[0]}
+      bash "$script" >"$out" 2>&1
+      rc=$?
     fi
-  elif [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ]; then
-    fm_run_timed "$PER_SCRIPT_TIMEOUT_SECS" bash "$script" >"$out" 2>&1
-    rc=$?
-  else
-    bash "$script" >"$out" 2>&1
-    rc=$?
-  fi
+    exit "$rc"
+  )
+  rc=$?
   if [ "$PER_SCRIPT_TIMEOUT_SECS" -gt 0 ] && [ "$rc" -eq 124 ]; then
     printf 'not ok - %s exceeded the per-script bound of %ss and was terminated\n' \
       "$script" "$PER_SCRIPT_TIMEOUT_SECS" >>"$out"

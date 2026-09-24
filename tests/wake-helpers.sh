@@ -61,6 +61,7 @@ make_case() {
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 if [ "${1:-}" = "list-windows" ]; then
   if [ -n "${FM_FAKE_TMUX_WINDOWS:-}" ]; then
     printf '%s\n' "$FM_FAKE_TMUX_WINDOWS"
@@ -96,6 +97,8 @@ if [ "${1:-}" = "display-message" ]; then
   case "$*" in
     *pane_current_command*) printf '%s\n' "${FM_FAKE_TMUX_CURRENT_COMMAND:-}"; exit 0 ;;
   esac
+  # Every other read answers empty from the same live pane capture-pane serves.
+  exit 0
 fi
 exit 1
 SH
@@ -167,6 +170,7 @@ make_supercase() {
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 case "${1:-}" in
   display-message)
     [ "${FM_FAKE_TMUX_PANE_ALIVE:-1}" = "1" ] || exit 1
@@ -247,6 +251,7 @@ make_bordered_case() {
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 COMPOSER="${FM_FAKE_COMPOSER:?FM_FAKE_COMPOSER unset}"
 write_composer() {
   text=$1

@@ -37,6 +37,7 @@ make_settle_fakebin() {
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 case "$*" in
   *"#{pane_current_path}"*)
     countfile="${FM_FAKE_PANE_COUNTFILE:?FM_FAKE_PANE_COUNTFILE unset}"

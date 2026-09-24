@@ -684,6 +684,7 @@ test_secondmate_active_turn_defers_stall_until_the_turn_ends() {
   fakebin="$dir/fakebin"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 case "${1:-}" in
   list-windows) printf '%s\n' 'firstmate:fm-mate' ;;
   capture-pane) printf 'working\n' ;;
@@ -750,6 +751,7 @@ test_secondmate_long_lived_mate_mid_turn_is_not_a_stall() {
   fakebin="$dir/fakebin"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 case "${1:-}" in
   list-windows) printf '%s\n' 'firstmate:fm-mate' ;;
   capture-pane) printf 'working\n' ;;
@@ -795,6 +797,7 @@ install_secondmate_alive_tmux() {  # <fakebin>
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 case "${1:-}" in
   list-windows) printf '%s\n' 'fm-mate' ;;
   capture-pane) exit 0 ;;
@@ -1042,6 +1045,7 @@ test_secondmate_stall_marker_rejects_symlink() {
   fakebin="$dir/fakebin"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 case "${1:-}" in
   list-windows) printf '%s\n' 'firstmate:fm-mate' ;;
   capture-pane) : ;;

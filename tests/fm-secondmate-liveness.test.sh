@@ -51,6 +51,7 @@ make_probe_tmux() {
   cat > "$fakebin/tmux" <<SH
 #!/usr/bin/env bash
 set -u
+[ "\${1:-}" != list-panes ] || exec "\$FM_TEST_FAKE_TMUX_LIST_PANES" "\$0" "\$@"
 case "\${1:-}" in
   display-message)
     for a in "\$@"; do case "\$a" in *pane_current_command*) printf '%s\n' '$comm'; exit 0 ;; esac; done
@@ -72,6 +73,7 @@ make_failed_probe_tmux() {
   cat > "$fakebin/tmux" <<SH
 #!/usr/bin/env bash
 set -u
+[ "\${1:-}" != list-panes ] || exec "\$FM_TEST_FAKE_TMUX_LIST_PANES" "\$0" "\$@"
 case "\${1:-}" in
   display-message)
     [ '$inventory' = unreadable ] && { printf '%s\n' node; exit 0; }
@@ -142,6 +144,7 @@ test_tmux_agent_state_rejects_malformed_targets_before_probe() {
   marker="$TMP_ROOT/tmux-malformed-called"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 printf 'called\n' > "$FM_TEST_TMUX_MARKER"
 printf 'bash\n'
 SH
@@ -272,6 +275,7 @@ make_liveness_tmux() {
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 mode=${FM_TEST_PANE_CMD:-zsh}
 case "${1:-}" in
   display-message)

@@ -16,6 +16,7 @@ make_fakebin() {  # <dir>
   fakebin=$(fm_fakebin "$1")
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 case "$*" in
   *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
 esac

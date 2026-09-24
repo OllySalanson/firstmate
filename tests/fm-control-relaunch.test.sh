@@ -56,6 +56,7 @@ make_tmux_stub() {  # <dir>
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 D=$FM_FAKE_DIR
 case "${1:-}" in
   send-keys)

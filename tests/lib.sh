@@ -38,6 +38,22 @@ umask 022
 # shellcheck source=tests/git-config-helpers.sh
 . "$(dirname "${BASH_SOURCE[0]}")/git-config-helpers.sh"
 
+# Keep every tmux command off the host's real tmux server; the helper's header
+# owns the invariant, and fm_test_cleanup below releases what it created.
+# shellcheck source=tests/tmux-isolation-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tmux-isolation-helpers.sh" || return 1
+
+# The shared `list-panes` answer for fake tmux scripts; its header owns the
+# contract and how a fake hands the call to it.
+FM_TEST_FAKE_TMUX_LIST_PANES="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fake-tmux-list-panes.sh"
+export FM_TEST_FAKE_TMUX_LIST_PANES
+
+# fm_test_fake_tmux_pane <session>:<window>: the pane id such a fake resolves
+# that window to, for asserting where a send or capture landed.
+fm_test_fake_tmux_pane() {
+  "$FM_TEST_FAKE_TMUX_LIST_PANES" --pane-id "$1"
+}
+
 # Exempt firstmate's own test suite from the gate-lifecycle refusal
 # (bin/fm-gate-refuse-lib.sh). The no-mistakes gate runs this suite FROM a gate
 # worktree - the exact environment that guard refuses - so without this every
@@ -170,6 +186,7 @@ export FM_TEST_STUB_MAX_BLOCK_SECONDS
 fm_test_cleanup() {
   local d
   fm_test_reap_procevent_homes
+  fm_test_tmux_isolation_cleanup
   for d in "${FM_TEST_CLEANUP_DIRS[@]:-}"; do
     [ -n "$d" ] && rm -rf "$d"
   done

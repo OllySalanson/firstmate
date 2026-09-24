@@ -1223,6 +1223,7 @@ test_scripts_route_explicit_target_through_meta_backend() {
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 printf 'tmux should not be used for a metadata-matched zellij target\n' >&2
 exit 42
 SH

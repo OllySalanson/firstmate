@@ -57,6 +57,7 @@ esac
 SH
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 [ -z "${FM_FAKE_TMUX_LOG:-}" ] || printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
 case "$*" in
   *display-message*'#{pane_current_command}'*) printf '%s\n' codex ;;

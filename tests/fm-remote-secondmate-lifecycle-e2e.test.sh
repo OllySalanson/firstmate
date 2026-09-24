@@ -93,7 +93,7 @@ case "\${1:-}" in
   capture-pane) printf '❯\n'; exit 0 ;;
   send-keys) [ ! -f "\$fail_send" ] || exit 1; exit 0 ;;
   kill-window) rm -f -- "\$state"; exit 0 ;;
-  list-panes) printf 'codex\n'; exit 0 ;;
+  list-panes) exec '$ROOT/tests/fake-tmux-list-panes.sh' "\$0" "\$@" ;;
 esac
 exit 0
 SH

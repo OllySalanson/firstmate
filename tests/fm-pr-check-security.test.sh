@@ -770,6 +770,7 @@ test_valid_recording_and_merge_derivation() {
   rm -rf "$dir/wt"
   cat > "$dir/fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 exit 0
 SH
   chmod 0700 "$dir/fakebin/tmux"
@@ -791,6 +792,7 @@ SH
       'mode=local-only'
     cat > "$dir/fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 exit 0
 SH
     chmod 0700 "$dir/fakebin/tmux"
@@ -1418,6 +1420,7 @@ test_teardown_removes_poll_artifacts() {
   printf 'trust\n' > "$dir/home/state/task-a.check-trust"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 exit 0
 SH
   chmod +x "$fakebin/tmux"
@@ -1449,6 +1452,7 @@ SH
   rm -f "$dir/home/state/task-a.check.sh"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 exit 0
 SH
   chmod +x "$fakebin/tmux"
@@ -1479,6 +1483,7 @@ SH
     printf 'counterpart sentinel\n' > "$dir/home/state/task-a.$counterpart"
     cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 printf '%s\n' "$*" >> "${FM_FAKE_TMUX_LOG:?}"
 exit 0
 SH

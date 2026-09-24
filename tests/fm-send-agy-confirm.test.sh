@@ -49,6 +49,7 @@ make_stubs() {  # <dir> <busy-at> -> echoes fakebin dir
   cat > "$fb/tmux" <<SH
 #!/usr/bin/env bash
 set -u
+[ "\${1:-}" != list-panes ] || exec "\$FM_TEST_FAKE_TMUX_LIST_PANES" "\$0" "\$@"
 cnt_file="$dir/plain.count"
 case "\${1:-}" in
   send-keys) exit 0 ;;

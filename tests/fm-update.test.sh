@@ -48,6 +48,7 @@ new_world() {
   cat > "$w/fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 case "${1:-}" in
   list-windows) cat "$FM_FAKE_DIR/windows" ;;
   display-message)

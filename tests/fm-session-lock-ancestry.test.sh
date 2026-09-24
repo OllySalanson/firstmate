@@ -731,7 +731,7 @@ expect_phase_foreign() {  # <dir> <n> <expected-arms> <owner-pid> <label>
 }
 
 test_e2e_background_session_keeps_its_lock_across_a_recycled_chain() {
-  local dir frontend daemon ptyhost spare i
+  local dir frontend daemon ptyhost spare reparent i
   dir="$TMP_ROOT/e2e-background-session"
   make_background_session_home "$dir"
   env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_PID \
@@ -757,15 +757,21 @@ test_e2e_background_session_keeps_its_lock_across_a_recycled_chain() {
   grep -qx "$frontend" "$dir/state/phase-1/ancestry" || fail "the healthy chain did not reach the front-end"
   expect_phase_owned "$dir" 1 1 "$frontend" "healthy chain"
 
-  # Recycle the bridge: the daemon ends, the pty-host is reparented to init, and
-  # the front-end that holds the lock stays alive.
+  # Recycle the bridge: the daemon ends, the pty-host is reparented away from it,
+  # and the front-end that holds the lock stays alive. The new parent is init on
+  # most hosts but a subreaper on others (WSL reparents orphans to its session's
+  # /init relay), so the check is that the daemon is no longer the parent.
   kill -TERM "$daemon"
   i=0
-  while [ "$i" -lt 200 ] && { kill -0 "$daemon" 2>/dev/null || [ "$(ps -o ppid= -p "$ptyhost" 2>/dev/null | tr -d ' ')" != 1 ]; }; do
+  while [ "$i" -lt 200 ] && { kill -0 "$daemon" 2>/dev/null || [ "$(ps -o ppid= -p "$ptyhost" 2>/dev/null | tr -d ' ')" = "$daemon" ]; }; do
     sleep 0.05
     i=$((i + 1))
   done
-  [ "$(ps -o ppid= -p "$ptyhost" 2>/dev/null | tr -d ' ')" = 1 ] || fail "the pty-host was not reparented to init after the daemon ended"
+  ! kill -0 "$daemon" 2>/dev/null || fail "the daemon did not end"
+  reparent=$(ps -o ppid= -p "$ptyhost" 2>/dev/null | tr -d ' ')
+  case "$reparent" in
+    ''|"$daemon") fail "the pty-host was not reparented after the daemon ended (parent '$reparent')" ;;
+  esac
   kill -0 "$frontend" 2>/dev/null || fail "the front-end died with the daemon, so the recycled case cannot be exercised"
 
   # Phase 2: the same session id over the broken chain - the reported drift.

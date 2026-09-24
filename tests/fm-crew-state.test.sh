@@ -197,6 +197,7 @@ SH
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 # FM_FAKE_TMUX_MISSING: the window is authoritatively gone - every addressed
 # call fails, but the session inventory still answers successfully and simply
 # omits the window, which is what proves absence.

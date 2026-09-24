@@ -25,6 +25,7 @@ make_fake_tmux() {
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 case "${1:-}" in
   has-session|new-session|new-window|kill-window)
     printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
@@ -51,7 +52,7 @@ case "${1:-}" in
     session=
     prev=
     for arg in "$@"; do
-      if [ "$prev" = -t ]; then session=$arg; break; fi
+      if [ "$prev" = -t ]; then session=${arg#=}; break; fi
       prev=$arg
     done
     while IFS= read -r recorded; do

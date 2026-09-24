@@ -19,6 +19,7 @@ make_case() {  # <name>
   : > "$TMP_ROOT/$dir/runtime.log"
   cat > "$TMP_ROOT/$dir/fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 printf 'tmux' >> "${FM_RUNTIME_LOG:?}"
 printf ' <%s>' "$@" >> "${FM_RUNTIME_LOG:?}"
 printf '\n' >> "${FM_RUNTIME_LOG:?}"
@@ -606,6 +607,7 @@ test_recorded_endpoint_that_changed_directory_still_tears_down() {
   # endpoint identity still owns the lifecycle; cwd alone must not brick it.
   cat > "$dir/fakebin/tmux" <<SH
 #!/usr/bin/env bash
+[ "\${1:-}" != list-panes ] || exec "\$FM_TEST_FAKE_TMUX_LIST_PANES" "\$0" "\$@"
 if [ "\${1:-}" = display-message ]; then
   printf '%s\n' '$dir/other-directory'
   exit 0

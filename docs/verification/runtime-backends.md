@@ -131,6 +131,34 @@ zsh
 A persistent parent shell waiting for a child remained reported as the parent process, while a shell that directly execed a simple command changed identity with the process itself.
 Pi and pi-signed 0.82.0 were reverified on 2026-07-27 through real isolated `fm-spawn.sh` launches.
 
+### Exact target resolution
+
+tmux's target fallback was verified on 2026-09-24 with tmux 3.4 on Linux, on a private server with windows `control` (active), `fm-abc`, and `fm-a.b` in session `sess`.
+
+```sh
+tmux display-message -p -t sess:fm-gone '#{window_name}'
+tmux display-message -p -t '=sess:=fm-gone' '#{window_name}'
+tmux display-message -p -t sess:fm-a '#{window_name}'
+tmux capture-pane -p -t sess:fm-gone
+tmux display-message -p -t sess:fm-a.b '#{window_name}'
+tmux display-message -p -t nosess:fm-abc '#{window_name}'
+```
+
+Observed output, with each command's exit status:
+
+```text
+control           (0)
+control           (0)
+fm-abc            (0)
+can't find window: fm-gone   (1)
+fm-abc            (0)
+                  (0)
+```
+
+An absent window, even under the exact `=` form, reads as the active window with exit 0; an absent window name is matched by prefix; a dotted window name is misparsed; and an absent session prints nothing with exit 0.
+`send-keys` and `list-panes` fail on an absent window like `capture-pane` does, and match by prefix the same way.
+`tests/fm-backend-tmux-smoke.test.sh` asserts each of these divergences before asserting that the adapter reads only the exact window, so it fails rather than passing vacuously on a tmux that changes them.
+
 ### Agent liveness name sources
 
 The earlier record that every harness is observed under its own `#{pane_current_command}` no longer holds and has been replaced by the per-harness evidence below.

@@ -901,7 +901,11 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
   local backend=$1 target=$2 expected_label=${3:-} session pane
   case "$backend" in
     tmux)
-      tmux display-message -p -t "$target" '#{pane_id}' >/dev/null 2>&1
+      # Never `display-message -t`: tmux answers an absent window from the
+      # session's active window and exits 0, so every dead window in a live
+      # session would read alive (bin/fm-tmux-lib.sh fm_tmux_pane_read).
+      fm_backend_source tmux || return 1
+      fm_tmux_exact_pane "$target" >/dev/null
       ;;
     herdr)
       fm_backend_source herdr || return 1

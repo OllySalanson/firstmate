@@ -190,6 +190,7 @@ make_send_fakebin() {
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 case "${1:-}" in
   send-keys)
     shift; literal=0; target=
@@ -257,7 +258,7 @@ test_send_refuses_and_admits() {
     || fail "send: normal steer was not durably enqueued"
   assert_not_contains "$(cat "$log")" "literal=1 arg=hello captain" \
     "send: normal steer payload must not be typed"
-  assert_contains "$(cat "$log")" "target=sess:fm-lane-ok literal=1 arg=: Firstmate instruction waiting" \
+  assert_contains "$(cat "$log")" "target=$(fm_test_fake_tmux_pane sess:fm-lane-ok) literal=1 arg=: Firstmate instruction waiting" \
     "send: normal steer should ring the durable inbox doorbell"
   pass "fm-send: refuses on marker and gate-worktree backstop; a normal steer uses the inbox"
 }

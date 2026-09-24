@@ -83,6 +83,7 @@ add_tmux_fake() {
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 LOG="${FM_ORCA_LOG:?}"
 {
   printf 'tmux'

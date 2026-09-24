@@ -37,10 +37,14 @@ exit 0
 SH
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 case "${1:-}" in
   display-message) case "$*" in *dead-*) exit 1 ;; *) printf '%%1\n' ;; esac ;;
   capture-pane)
-    case "$*" in
+    target=; prev=
+    for arg in "$@"; do [ "$prev" != -t ] || target=$arg; prev=$arg; done
+    case "$target" in %*) target=$("$FM_TEST_FAKE_TMUX_LIST_PANES" --target-of "$target") ;; esac
+    case "$target" in
       *fm-domain-alpha*) printf 'stale terminal summary: Phase 7 started\n> \n' ;;
       *) printf 'all quiet\n> \n' ;;
     esac
@@ -3002,6 +3006,7 @@ EOF
   printf 'working: old generation\n' > "$home/state/generation-race.status"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 if [ "${1:-}" = display-message ]; then
   if mkdir "$RACE_ONCE" 2>/dev/null; then
     tmp="$RACE_META.tmp.$$"
