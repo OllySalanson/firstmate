@@ -72,20 +72,23 @@ fm_tmux_strip_ghost() { fm_composer_strip_ghost; }
 # named at all. This reader therefore never lets tmux pick the pane: it lists
 # the panes of the exactly named window (or of the whole exact session when tmux
 # cannot name that window exactly, or of the exact pane or window id), selects
-# the row by comparing names and ids in the shell, and reads <format> in that
-# same listing, so the value can never come from a pane other than the one
-# matched.
+# the row by comparing names, indexes, and ids in the shell, and reads <format>
+# in that same listing, so the value can never come from a pane other than the
+# one matched.
 #
-# Accepted targets: `%<pane-id>`, `@<window-id>`, `<session>`, and
-# `<session>:<window>`, where session is a name (optionally `=`-prefixed) or a
-# `$<session-id>`, and window is a name (optionally `=`-prefixed), a numeric
-# index (tried before a window of that name, as tmux does), or `@<window-id>`.
-# A window target reads that window's active pane and a bare session its active
-# window's active pane, as tmux means those targets. Any other shape reads as
-# absent; a `.pane` suffix is part of the window name, never a pane selector.
+# Accepted targets: `%<pane-id>`, `@<window-id>`, `<session>`,
+# `<session>:<window>`, and `<session>:<window>.<pane-index>`, where session is
+# a name (optionally `=`-prefixed) or a `$<session-id>`, and window is a name
+# (optionally `=`-prefixed), a numeric index (tried before a window of that
+# name, as tmux does), or `@<window-id>`. A window target reads that window's
+# active pane and a bare session its active window's active pane, as tmux means
+# those targets. A window that exists under the full dotted name wins; only
+# when none does is a trailing `.<pane-index>` read as a pane selector. Any
+# other shape reads as absent.
 fm_tmux_pane_read() {  # <target> <format>
   local target=${1-} format=${2-} tab scope lookup session='' window='' rows
-  local sid sname pid wid widx wname wact pact value index_hit=0 index_value='' name_hit=0 name_value=''
+  local sid sname pid wid widx wname wact pact pidx value index_hit=0 index_value='' name_hit=0 name_value=''
+  local split_window='' split_pane='' split_hit=0 split_value='' split_name_hit=0 split_name_value=''
   tab=$(printf '\t')
   case "$target" in
     %*|@*)
@@ -113,16 +116,23 @@ fm_tmux_pane_read() {  # <target> <format>
       # to tmux, a numeric one may be an index, and a leading `+-!^$` is a tmux
       # window token, so those keep the whole-session listing.
       case "$window" in
-        @*) scope=''; lookup=$window ;;
         ''|*.*|[-+!^\$]*) ;;
+        @*) scope=''; lookup=$window ;;
         *[!0-9]*) scope=''; lookup="$lookup=$window" ;;
+      esac
+      case "$window" in
+        ?*.*)
+          split_window=${window%.*}
+          split_pane=${window##*.}
+          case "$split_pane" in ''|*[!0-9]*) split_window='' ;; esac
+          ;;
       esac
       ;;
   esac
   # Every free-text field carries a leading `=` so an empty value cannot make
   # `read` collapse adjacent tab separators and shift the fields.
-  rows=$(tmux list-panes ${scope:+"$scope"} -t "$lookup" -F "#{session_id}$tab=#{session_name}$tab#{pane_id}$tab#{window_id}$tab#{window_index}$tab=#{window_name}$tab#{window_active}$tab#{pane_active}$tab=$format" 2>/dev/null) || return 1
-  while IFS=$tab read -r sid sname pid wid widx wname wact pact value; do
+  rows=$(tmux list-panes ${scope:+"$scope"} -t "$lookup" -F "#{session_id}$tab=#{session_name}$tab#{pane_id}$tab#{window_id}$tab#{window_index}$tab=#{window_name}$tab#{window_active}$tab#{pane_active}$tab#{pane_index}$tab=$format" 2>/dev/null) || return 1
+  while IFS=$tab read -r sid sname pid wid widx wname wact pact pidx value; do
     sname=${sname#=}
     wname=${wname#=}
     value=${value#=}
@@ -142,27 +152,25 @@ fm_tmux_pane_read() {  # <target> <format>
       '$'*) [ "$sid" = "$session" ] || continue ;;
       *) [ "$sname" = "$session" ] || continue ;;
     esac
+    if [ -n "$split_window" ] && [ "$pidx" = "$split_pane" ]; then
+      if [ "$wid" = "$split_window" ] || [ "$widx" = "$split_window" ]; then
+        split_hit=1
+        split_value=$value
+      elif [ "$wname" = "$split_window" ] && [ "$split_name_hit" -eq 0 ]; then
+        split_name_hit=1
+        split_name_value=$value
+      fi
+    fi
     [ "$pact" = 1 ] || continue
-    case "$window" in
-      '')
-        [ "$wact" = 1 ] || continue
-        printf '%s\n' "$value"
-        return 0
-        ;;
-      @*)
-        [ "$wid" = "$window" ] || continue
-        printf '%s\n' "$value"
-        return 0
-        ;;
-      *[!0-9]*) ;;
-      *)
-        if [ "$widx" = "$window" ]; then
-          index_hit=1
-          index_value=$value
-        fi
-        ;;
-    esac
-    if [ "$wname" = "$window" ] && [ "$name_hit" -eq 0 ]; then
+    if [ -z "$window" ]; then
+      [ "$wact" = 1 ] || continue
+      printf '%s\n' "$value"
+      return 0
+    fi
+    if [ "$wid" = "$window" ] || [ "$widx" = "$window" ]; then
+      index_hit=1
+      index_value=$value
+    elif [ "$wname" = "$window" ] && [ "$name_hit" -eq 0 ]; then
       name_hit=1
       name_value=$value
     fi
@@ -175,6 +183,14 @@ EOF
   fi
   if [ "$name_hit" -eq 1 ]; then
     printf '%s\n' "$name_value"
+    return 0
+  fi
+  if [ "$split_hit" -eq 1 ]; then
+    printf '%s\n' "$split_value"
+    return 0
+  fi
+  if [ "$split_name_hit" -eq 1 ]; then
+    printf '%s\n' "$split_name_value"
     return 0
   fi
   return 1

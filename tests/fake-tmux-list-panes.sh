@@ -87,7 +87,7 @@ row() {  # <session> <window> <index> <window-active> <read-target> [window-id]
   [ "$value_format" != '#{pane_id}' ] || value=$pane
   # `$0` is the literal session id tmux would print.
   # shellcheck disable=SC2016
-  printf '$0\t=%s\t%s\t%s\t%s\t=%s\t%s\t1\t=%s\n' "$1" "$pane" "$wid" "$3" "$2" "$4" "$value"
+  printf '$0\t=%s\t%s\t%s\t%s\t=%s\t%s\t1\t0\t=%s\n' "$1" "$pane" "$wid" "$3" "$2" "$4" "$value"
 }
 
 case "$target" in

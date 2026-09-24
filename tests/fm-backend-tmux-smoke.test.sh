@@ -61,7 +61,7 @@ TARGET="$SESSION:$WINDOW"
 
 tmux new-session -d -s "$SESSION" -x 200 -y 50 \
   || fail "real tmux: new-session failed"
-fm_backend_tmux_create_task "$SESSION" "$WINDOW" "$HOME" \
+fm_backend_tmux_create_task "$SESSION" "$WINDOW" "$HOME" >/dev/null \
   || fail "fm_backend_tmux_create_task failed to create the task window"
 tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx "$WINDOW" \
   || fail "created window is not visible in the real session"
@@ -230,6 +230,44 @@ fm_backend_tmux_send_text_line "$SESSION:$DOTTED" "printf 'dotted-%s\\n' reached
 wait_for_capture_text "$SESSION:$DOTTED" "dotted-reached" \
   || fail "text for a dotted window did not reach it"
 pass "real tmux: a window whose name contains a dot is addressed exactly"
+
+SPLIT_PANE=$(tmux split-window -d -P -F '#{pane_id}' -t "=$SESSION:=$WINDOW") \
+  || fail "could not split the task window"
+ACTIVE_PANE=$(fm_tmux_exact_pane "$TARGET") || fail "the split task window read as missing"
+[ "$ACTIVE_PANE" != "$SPLIT_PANE" ] || fail "precondition: the split pane was expected to stay inactive"
+WINDOW_INDEX=$(fm_tmux_pane_read "$TARGET" '#{window_index}') || fail "could not read the task window index"
+pane=$(fm_tmux_exact_pane "$SESSION:$WINDOW.1") || fail "a live session:window.pane target read as missing"
+[ "$pane" = "$SPLIT_PANE" ] || fail "session:window.pane resolved to '$pane', expected '$SPLIT_PANE'"
+pane=$(fm_tmux_exact_pane "$SESSION:$WINDOW_INDEX.1") || fail "a live session:index.pane target read as missing"
+[ "$pane" = "$SPLIT_PANE" ] || fail "session:index.pane resolved to '$pane', expected '$SPLIT_PANE'"
+pane=$(fm_tmux_exact_pane "$SESSION:$WINDOW.0") || fail "session:window.0 read as missing"
+[ "$pane" = "$ACTIVE_PANE" ] || fail "session:window.0 resolved to '$pane', expected '$ACTIVE_PANE'"
+fm_backend_target_exists tmux "$SESSION:$WINDOW.1" || fail "target_exists refused a live session:window.pane target"
+for absent in "$SESSION:$WINDOW.7" "$SESSION:$DEAD.1" "$SESSION:fm-smoke-prefix.1" "$SESSION:$WINDOW_INDEX.7"; do
+  if fm_backend_target_exists tmux "$absent"; then
+    fail "an absent window or pane '$absent' read as existing"
+  fi
+done
+fm_backend_tmux_send_text_line "$SESSION:$WINDOW.1" "printf 'split-%s\\n' reached" \
+  || fail "send_text_line failed for a live session:window.pane target"
+wait_for_capture_text "$SPLIT_PANE" "split-reached" || fail "text for session:window.pane did not reach the split pane"
+case "$(tmux capture-pane -p -t "$ACTIVE_PANE")" in
+  *split-reached*) fail "text for session:window.pane was typed into the window's active pane" ;;
+esac
+pass "real tmux: a session:window.pane target reaches that exact pane and an absent pane reads missing"
+
+SHADOW="$WINDOW.1"
+fm_backend_tmux_create_task "$SESSION" "$SHADOW" "$HOME" >/dev/null \
+  || fail "could not create the window whose name looks like window.pane"
+SHADOW_PANE=$(tmux list-panes -s -t "=$SESSION:" -F '#{window_name} #{pane_id}' | awk -v n="$SHADOW" '$1 == n { print $2 }')
+[ -n "$SHADOW_PANE" ] || fail "could not read the shadowing window's pane"
+pane=$(fm_tmux_exact_pane "$SESSION:$SHADOW") || fail "a live window named like window.pane read as missing"
+[ "$pane" = "$SHADOW_PANE" ] \
+  || fail "an exact window named '$SHADOW' lost to the window.pane reading: got '$pane', expected '$SHADOW_PANE'"
+tmux kill-pane -t "$SHADOW_PANE" || fail "could not kill the shadowing window"
+pane=$(fm_tmux_exact_pane "$SESSION:$SHADOW") || fail "session:window.pane stopped resolving once the shadowing window died"
+[ "$pane" = "$SPLIT_PANE" ] || fail "session:window.pane resolved to '$pane' after the shadow died, expected '$SPLIT_PANE'"
+pass "real tmux: an existing window named like window.pane wins over the pane selector"
 
 # --- kill and recovery-grade missing-window classification ------------------
 
