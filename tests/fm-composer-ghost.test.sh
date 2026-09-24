@@ -45,6 +45,7 @@ make_fake_tmux() {  # <dir>
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 case "${1:-}" in
   display-message)
     for a in "$@"; do case "$a" in *cursor_y*) printf '%s\n' "${FM_FAKE_CY:-0}"; exit 0 ;; esac; done
@@ -351,20 +352,23 @@ test_pi_identity_requires_readable_busy_state() (
   local out
   # Keep the mocks in this subshell so they cannot affect later tests. Defining
   # functions directly inside a command substitution does not parse in Bash 3.2.
-  # shellcheck disable=SC2329 # Mock invoked indirectly by the sourced adapter.
-  tmux() {
-    local arg
-    for arg in "$@"; do
-      case "$arg" in
-        *pane_tty*) printf '\n'; return 0 ;;
-        *pane_current_command*) printf 'pi\n'; return 0 ;;
-      esac
-    done
-    return 1
-  }
+  local fb="$TMP_ROOT/pi-unreadable-busy/fakebin"
+  mkdir -p "$fb"
+  cat > "$fb/tmux" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
+[ "${1:-}" = display-message ] || exit 1
+case "$*" in
+  *pane_tty*) printf '\n' ;;
+  *pane_current_command*) printf 'pi\n' ;;
+esac
+SH
+  chmod +x "$fb/tmux"
+  [ "$(PATH="$fb:$PATH" fm_tmux_pane_read fakepane '#{pane_current_command}')" = pi ] \
+    || fail "precondition: the fake pane must read as a live Pi"
   # shellcheck disable=SC2329 # Mock invoked indirectly by the sourced adapter.
   fm_pane_busy_state() { printf 'unknown'; }
-  if out=$(fm_tmux_composer_identity fakepane); then
+  if out=$(PATH="$fb:$PATH" fm_tmux_composer_identity fakepane); then
     fail "a live Pi process with unreadable busy state must not produce identity, got '$out'"
   fi
   pass "fm_tmux_composer_identity: unknown busy state cannot become idle identity"

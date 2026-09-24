@@ -36,10 +36,15 @@ fm_backend_tmux_resolve_bare_selector() {  # <name>
     || { echo "error: no window named $name" >&2; return 1; }
 }
 
-# fm_backend_tmux_capture: bounded plain-text pane capture. Mirrors
-# fm-peek.sh's and fm-watch.sh's `tmux capture-pane -p -t "$T" -S -"$N"`.
+# Every primitive below that takes a <target> resolves it through
+# fm_tmux_exact_pane or fm_tmux_pane_read (bin/fm-tmux-lib.sh) first, so an
+# absent window fails instead of reading or typing into a neighbor.
+
+# fm_backend_tmux_capture: bounded plain-text pane capture.
 fm_backend_tmux_capture() {  # <target> <lines>
-  tmux capture-pane -p -t "$1" -S -"$2"
+  local pane
+  pane=$(fm_tmux_exact_pane "$1") || { echo "error: no tmux pane for $1" >&2; return 1; }
+  tmux capture-pane -p -t "$pane" -S -"$2"
 }
 
 # fm_backend_tmux_visible_capture: the visible viewport only. `-S -0` starts at
@@ -47,15 +52,16 @@ fm_backend_tmux_capture() {  # <target> <lines>
 # of view can appear in the result - the guarantee a trust-dialog predicate
 # needs, which the scrollback-bounded capture above cannot give.
 fm_backend_tmux_visible_capture() {  # <target>
-  tmux capture-pane -p -t "$1" -S -0
+  local pane
+  pane=$(fm_tmux_exact_pane "$1") || { echo "error: no tmux pane for $1" >&2; return 1; }
+  tmux capture-pane -p -t "$pane" -S -0
 }
 
-# fm_backend_tmux_send_key: one named key. Mirrors fm-send.sh's --key path:
-# `tmux display-message -p -t "$T" '#{pane_id}' >/dev/null`, then
-# `tmux send-keys -t "$T" "$2"`.
+# fm_backend_tmux_send_key: one named key.
 fm_backend_tmux_send_key() {  # <target> <key>
-  tmux display-message -p -t "$1" '#{pane_id}' >/dev/null
-  tmux send-keys -t "$1" "$2"
+  local pane
+  pane=$(fm_tmux_exact_pane "$1") || { echo "error: no tmux pane for $1" >&2; return 1; }
+  tmux send-keys -t "$pane" "$2"
 }
 
 # fm_backend_tmux_send_text_submit: type <text> into <target> once, then
@@ -107,26 +113,28 @@ fm_backend_tmux_create_task() {  # <session> <window-name> <proj-abs> -> prints 
 }
 
 # fm_backend_tmux_current_path: the live pane's current working directory, or
-# empty on any tmux error. Mirrors fm-spawn.sh's worktree-discovery poll:
-# `tmux display-message -p -t "$T" '#{pane_current_path}'`.
+# empty when the exact pane is absent or unreadable.
 fm_backend_tmux_current_path() {  # <target>
-  tmux display-message -p -t "$1" '#{pane_current_path}' 2>/dev/null
+  fm_tmux_pane_read "$1" '#{pane_current_path}'
 }
 
 # fm_backend_tmux_send_text_line: send one line of TEXT then Enter, with no
 # composer verification - used for the fixed spawn-time commands
 # (`treehouse get`, the GOTMPDIR export) that already ran this exact sequence
-# inline in fm-spawn.sh. Mirrors `tmux send-keys -t "$T" "<text>" Enter`.
+# inline in fm-spawn.sh.
 fm_backend_tmux_send_text_line() {  # <target> <text>
-  tmux send-keys -t "$1" "$2" Enter
+  local pane
+  pane=$(fm_tmux_exact_pane "$1") || { echo "error: no tmux pane for $1" >&2; return 1; }
+  tmux send-keys -t "$pane" "$2" Enter
 }
 
 # fm_backend_tmux_send_literal: send TEXT as literal bytes with no
 # submission - the caller sends Enter separately (fm-spawn.sh's launch-command
 # send pauses between the literal send and Enter for the harness to settle).
-# Mirrors `tmux send-keys -t "$T" -l "<text>"`.
 fm_backend_tmux_send_literal() {  # <target> <text>
-  tmux send-keys -t "$1" -l "$2"
+  local pane
+  pane=$(fm_tmux_exact_pane "$1") || { echo "error: no tmux pane for $1" >&2; return 1; }
+  tmux send-keys -t "$pane" -l "$2"
 }
 
 # fm_backend_tmux_window_inventory: <session-target>'s window names, one per
@@ -211,9 +219,10 @@ fm_backend_tmux_kill() {  # <target>
 # "sleep 30"` alone reports "sleep" because bash execs directly into it, but
 # a persisting parent script running `sleep` as a child reports the PARENT's
 # own name throughout; the value reverts to the shell's own name only once
-# the foreground command actually exits). Empty on any tmux error.
+# the foreground command actually exits). Empty, with a nonzero status, when
+# the exact pane is absent or unreadable.
 fm_backend_tmux_current_command() {  # <target>
-  tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null
+  fm_tmux_pane_read "$1" '#{pane_current_command}'
 }
 
 # The process-name classifier every liveness signal below feeds
@@ -242,13 +251,11 @@ fm_backend_tmux_current_command() {  # <target>
 # `pi-signed` wrapper and a `pi` engine in one group), so no launcher needs its
 # own special case here.
 #
-# Like fm_backend_tmux_current_command this is a RAW pane read: tmux answers an
-# absent target from the client's active window rather than failing, so callers
-# must confirm exact window membership first, exactly as the classifier below
-# does, or they will describe some other pane entirely.
+# Like fm_backend_tmux_current_command it reads only the exact pane <target>
+# names, and reads nothing when that pane is absent.
 fm_backend_tmux_foreground_comms() {  # <target>
   local target=$1 tty pid pgid tpgid comm
-  tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
+  tty=$(fm_tmux_pane_read "$target" '#{pane_tty}') || return 0
   [ -n "$tty" ] || return 0
   LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
     | while read -r pid pgid tpgid comm; do
@@ -263,7 +270,7 @@ fm_backend_tmux_foreground_comms() {  # <target>
 # argv[0]; bin/fm-gemini-lib.sh owns what counts as evidence inside one.
 fm_backend_tmux_foreground_args() {  # <target>
   local target=$1 tty pid pgid tpgid comm args
-  tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
+  tty=$(fm_tmux_pane_read "$target" '#{pane_tty}') || return 0
   [ -n "$tty" ] || return 0
   LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
     | while read -r pid pgid tpgid comm; do
@@ -276,7 +283,7 @@ fm_backend_tmux_foreground_args() {  # <target>
 
 fm_backend_tmux_foreground_pids() {  # <target>
   local target=$1 tty pid pgid tpgid comm
-  tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
+  tty=$(fm_tmux_pane_read "$target" '#{pane_tty}') || return 0
   [ -n "$tty" ] || return 0
   LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
     | while read -r pid pgid tpgid comm; do
@@ -288,7 +295,7 @@ fm_backend_tmux_foreground_pids() {  # <target>
 
 fm_backend_tmux_foreground_argv0s() {  # <target>
   local target=$1 tty pid pgid tpgid comm args argv0
-  tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || return 0
+  tty=$(fm_tmux_pane_read "$target" '#{pane_tty}') || return 0
   [ -n "$tty" ] || return 0
   LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null \
     | while read -r pid pgid tpgid comm; do
@@ -304,9 +311,9 @@ fm_backend_tmux_foreground_argv0s() {  # <target>
 # fm_backend_tmux_agent_state: recovery-grade harness-agent state for one
 # recorded target. See bin/fm-backend.sh's fm_backend_agent_state for the
 # shared state vocabulary and docs/tmux-backend.md "Agent liveness probe" for
-# the empirical basis. Tmux silently falls back to the active window when a
-# named target is absent, so the exact recorded window must appear in a
-# successful session inventory before its foreground command can be trusted.
+# the empirical basis. The exact recorded session is inventoried first so an
+# absent window is told apart from an unreadable one; the pane reads after it
+# go through the exact-pane resolver and so can never describe a neighbor.
 # An omitted window or a definitive missing-session/server response is
 # `missing`; any other inventory or pane read failure is `unreadable`, so a
 # transient tmux problem never licenses a duplicate.
@@ -329,7 +336,7 @@ fm_backend_tmux_agent_state() {  # <target>
   esac
   session=${target%%:*}
   window=${target#*:}
-  windows=$(fm_backend_tmux_window_inventory "$session")
+  windows=$(fm_backend_tmux_window_inventory "=$session")
   inventory_status=$?
   if [ "$inventory_status" -ne 0 ]; then
     if [ "$inventory_status" -eq 2 ]; then

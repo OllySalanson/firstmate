@@ -55,9 +55,9 @@ chmod +x "$FAKEBIN/fake-ssh"
 cat > "$FAKEBIN/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 case "$*" in
   *list-windows*) printf '%s\n' "${FM_FAKE_TMUX_WINDOW:-}" ;;
-  *list-panes*) printf '%s\n' "${FM_FAKE_TMUX_PANE:-}" ;;
   *display-message*'#{pane_current_command}'*) printf '%s\n' "${FM_FAKE_TMUX_COMMAND:-claude}" ;;
   *display-message*'#{pane_pid}'*) printf '%s\n' "$$" ;;
   *display-message*'#{pane_id}'*) printf '%s\n' '%1' ;;
@@ -105,6 +105,7 @@ run_cascade() { # <primary-home> [env assignments...]
     TMPDIR="${TMPDIR:-/tmp}" \
     FM_HOME="$home" \
     FM_SSH_BIN="$FAKEBIN/fake-ssh" \
+    FM_TEST_FAKE_TMUX_LIST_PANES="$FM_TEST_FAKE_TMUX_LIST_PANES" \
     "$@" \
     "$CASCADE"
 }

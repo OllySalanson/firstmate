@@ -1550,6 +1550,8 @@ test_fm_send_refuses_bare_window_without_home_meta() {
     || fail "fm-send did not explain missing home metadata"
   grep -F 'send-keys -t other-session:fm-missing' "$log" >/dev/null \
     && fail "fm-send fell back to a foreign same-name window"
+  grep -F "send-keys -t $(fm_test_fake_tmux_pane other-session:fm-missing)" "$log" >/dev/null \
+    && fail "fm-send fell back to a foreign same-name window"
   pass "fm-send refuses a bare firstmate window with no metadata in this home"
 }
 

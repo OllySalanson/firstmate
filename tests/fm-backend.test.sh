@@ -630,6 +630,7 @@ test_resolve_selector_three_forms() {
   fakebin="$TMP_ROOT/resolve-fakebin"; mkdir -p "$fakebin"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 case "${1:-}" in
   list-windows) printf 'firstmate:adhoc\nother:otherwin\n' ;;
 esac
@@ -691,6 +692,7 @@ make_send_fakebin() {  # <dir> -> echoes fakebin dir; logs every tmux call to $F
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 { printf 'tmux'; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "${FM_TMUX_LOG:?}"
 case "${1:-}" in
   send-keys) exit 0 ;;
@@ -752,9 +754,8 @@ test_send_tmux_contract() {
   run_send_case "$ROOT" "$fb" "$log" "$home" -- "sess:win" --key Escape
   rc=$?
   expect_code 0 "$rc" "fm-send --key should succeed against a live fake pane"
-  assert_contains "$(cat "$log")" $'\x1f''display-message'$'\x1f''-p'$'\x1f''-t'$'\x1f''sess:win'$'\x1f''#{pane_id}' \
-    "fm-send --key did not verify the explicit tmux target before sending"
-  assert_contains "$(cat "$log")" $'\x1f''Escape' "fm-send --key did not send the named key"
+  assert_contains "$(cat "$log")" $'\x1f''send-keys'$'\x1f''-t'$'\x1f'"$(fm_test_fake_tmux_pane sess:win)"$'\x1f''Escape' \
+    "fm-send --key did not send the named key to the exact pane of the explicit target"
   assert_not_contains "$(cat "$log")" $'\x1f''-l'$'\x1f' "fm-send --key must not type literal text"
 
   # Case 2: plain text - typed literally exactly once, submitted with Enter,
@@ -762,7 +763,7 @@ test_send_tmux_contract() {
   run_send_case "$ROOT" "$fb" "$log" "$home" -- "sess:win" hello captain
   rc=$?
   expect_code 0 "$rc" "fm-send plain text should confirm against the empty fake composer"
-  assert_contains "$(cat "$log")" $'\x1f''send-keys'$'\x1f''-t'$'\x1f''sess:win'$'\x1f''-l'$'\x1f''hello captain' \
+  assert_contains "$(cat "$log")" $'\x1f''send-keys'$'\x1f''-t'$'\x1f'"$(fm_test_fake_tmux_pane sess:win)"$'\x1f''-l'$'\x1f''hello captain' \
     "fm-send did not send the literal text with send-keys -l"
   [ "$(grep -c $'\x1f''-l'$'\x1f' "$log")" -eq 1 ] \
     || fail "fm-send must type the text exactly once (Enter-only retries, never a retype)"
@@ -774,7 +775,7 @@ test_send_tmux_contract() {
   run_send_case "$ROOT" "$fb" "$log" "$home" -- "sess:win" /some-skill
   rc=$?
   expect_code 0 "$rc" "fm-send /skill should confirm against the empty fake composer"
-  assert_contains "$(cat "$log")" $'\x1f''send-keys'$'\x1f''-t'$'\x1f''sess:win'$'\x1f''-l'$'\x1f''/some-skill' \
+  assert_contains "$(cat "$log")" $'\x1f''send-keys'$'\x1f''-t'$'\x1f'"$(fm_test_fake_tmux_pane sess:win)"$'\x1f''-l'$'\x1f''/some-skill' \
     "fm-send /skill did not type the literal slash command"
   [ "$(grep -c $'\x1f''-l'$'\x1f' "$log")" -eq 1 ] \
     || fail "fm-send /skill must type the text exactly once"
@@ -791,6 +792,7 @@ make_peek_fakebin() {  # <dir> <capture-output> -> echoes fakebin dir
   cat > "$fb/tmux" <<SH
 #!/usr/bin/env bash
 set -u
+[ "\${1:-}" != list-panes ] || exec "\$FM_TEST_FAKE_TMUX_LIST_PANES" "\$0" "\$@"
 { printf 'tmux'; for a in "\$@"; do printf '\\x1f%s' "\$a"; done; printf '\\n'; } >> "\${FM_TMUX_LOG:?}"
 case "\${1:-}" in
   capture-pane) cat "$dir/capture.out" ;;
@@ -822,12 +824,12 @@ test_peek_conformance_old_vs_new() {
 
   [ "$out_old" = "$out_new" ] || fail "fm-peek output differs old vs new"$'\n'"--- old ---"$'\n'"$out_old"$'\n'"--- new ---"$'\n'"$out_new"
   [ "$out_new" = "$payload" ] || fail "fm-peek did not pass through the fake capture-pane output exactly"
-  diff -u "$log_old" "$log_new" > "$TMP_ROOT/peek-diff.txt" 2>&1 \
-    || fail "fm-peek: tmux command log differs old vs new"$'\n'"$(cat "$TMP_ROOT/peek-diff.txt")"
-  assert_contains "$(cat "$log_new")" $'\x1f''capture-pane'$'\x1f''-p'$'\x1f''-t'$'\x1f''sess:win'$'\x1f''-S'$'\x1f''-25' \
-    "fm-peek did not call capture-pane -p -t <target> -S -<lines> exactly"
+  # The command log deliberately differs from the baseline: the target is now
+  # resolved to its exact pane first, and the capture addresses that pane.
+  assert_contains "$(cat "$log_new")" $'\x1f''capture-pane'$'\x1f''-p'$'\x1f''-t'$'\x1f'"$(fm_test_fake_tmux_pane sess:win)"$'\x1f''-S'$'\x1f''-25' \
+    "fm-peek did not capture the exact pane of its target with -S -<lines>"
 
-  pass "fm-peek.sh: capture-pane invocation and output are byte-identical old vs new"
+  pass "fm-peek.sh: output is byte-identical old vs new and the capture addresses the exact pane"
 }
 
 # --- old vs new: fm-spawn.sh --------------------------------------------------
@@ -838,6 +840,7 @@ make_spawn_fakebin() {  # <dir> <fake-worktree-path> -> echoes fakebin dir
   cat > "$fb/tmux" <<SH
 #!/usr/bin/env bash
 set -u
+[ "\${1:-}" != list-panes ] || exec "\$FM_TEST_FAKE_TMUX_LIST_PANES" "\$0" "\$@"
 { printf 'tmux'; for a in "\$@"; do printf '\\x1f%s' "\$a"; done; printf '\\n'; } >> "\${FM_TMUX_LOG:?}"
 case "\${1:-}" in
   display-message)
@@ -902,6 +905,7 @@ make_spawn_symlink_fakebin() {  # <dir> <initial-project-path> <worktree-path> -
   cat > "$fb/tmux" <<SH
 #!/usr/bin/env bash
 set -u
+[ "\${1:-}" != list-panes ] || exec "\$FM_TEST_FAKE_TMUX_LIST_PANES" "\$0" "\$@"
 { printf 'tmux'; for a in "\$@"; do printf '\\x1f%s' "\$a"; done; printf '\\n'; } >> "\${FM_TMUX_LOG:?}"
 case "\${1:-}" in
   display-message)
@@ -975,6 +979,7 @@ make_teardown_fakebin() {  # <dir> -> echoes fakebin dir; logs tmux+treehouse ca
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 { printf 'tmux'; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "${FM_TMUX_LOG:?}"
 exit 0
 SH

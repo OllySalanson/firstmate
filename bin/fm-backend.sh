@@ -901,7 +901,11 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
   local backend=$1 target=$2 expected_label=${3:-} session pane
   case "$backend" in
     tmux)
-      tmux display-message -p -t "$target" '#{pane_id}' >/dev/null 2>&1
+      # Never `display-message -t`: tmux answers an absent window from the
+      # session's active window and exits 0, so every dead window in a live
+      # session would read alive (bin/fm-tmux-lib.sh fm_tmux_pane_read).
+      fm_backend_source tmux || return 1
+      fm_tmux_exact_pane "$target" >/dev/null
       ;;
     herdr)
       fm_backend_source herdr || return 1
@@ -932,6 +936,26 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
       ;;
     *)
       return 1
+      ;;
+  esac
+}
+
+# fm_backend_operator_target: the target to use for an operator-typed override
+# (FM_SUPERVISOR_TARGET, an explicit fm-send target), or return 1 when it names
+# no live endpoint on BACKEND. tmux additionally accepts a standard
+# `session:window.pane` there (bin/fm-tmux-lib.sh fm_tmux_operator_target);
+# recorded task targets keep fm_backend_target_exists and never get that
+# reading, so a dead dotted task window cannot read as a sibling's pane.
+fm_backend_operator_target() {  # <backend> <target>
+  local backend=$1 target=$2
+  case "$backend" in
+    tmux)
+      fm_backend_source tmux || return 1
+      fm_tmux_operator_target "$target"
+      ;;
+    *)
+      fm_backend_target_exists "$backend" "$target" || return 1
+      printf '%s\n' "$target"
       ;;
   esac
 }

@@ -37,6 +37,7 @@ printf 'state: %s · source: fake\n' "${FM_FAKE_CREW_STATE:-unknown}"
 SH
   cat > "$fake/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 case "${1:-}" in
   display-message) printf '%%1\n' ;;
   capture-pane) printf 'idle\n> \n' ;;

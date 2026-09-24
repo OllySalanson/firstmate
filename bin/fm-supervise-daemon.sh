@@ -956,7 +956,7 @@ wedge_alarm_notify() {  # <summary> <marker>
 # is lost - the buffer and the
 # wake-queue both survive - but the stall stops being invisible.
 inject_wedge_alarm() {  # <state> <age-seconds>
-  local state=$1 age=$2 marker target backend max_defer now notify=1
+  local state=$1 age=$2 marker target backend pane max_defer now notify=1
   marker="$state/.subsuper-inject-wedged"
   max_defer="${FM_MAX_DEFER_SECS:-$MAX_DEFER_SECS_DEFAULT}"
   # Re-alarm at most once per max-defer window so a long wedge does not spam.
@@ -981,8 +981,8 @@ inject_wedge_alarm() {  # <state> <age-seconds>
   # with no herdr equivalent; the log line + durable marker above are already
   # the primary, backend-independent signal, so a non-tmux backend just skips
   # this cosmetic extra rather than attempting an unsupported call.
-  if [ "$backend" = tmux ]; then
-    tmux display-message -t "$target" "fm: away-mode escalations WEDGED ${age}s — see $marker" 2>/dev/null || true
+  if [ "$backend" = tmux ] && pane=$(fm_tmux_exact_pane "$target"); then
+    tmux display-message -t "$pane" "fm: away-mode escalations WEDGED ${age}s — see $marker" 2>/dev/null || true
   fi
   # Backend-independent active alert. Unlike the tmux flash above (skipped on
   # every non-tmux backend), this can reach the captain even when every pane and
@@ -1635,21 +1635,22 @@ fm_super_main() {
   else
     echo "warn: could not auto-discover supervisor pane (no FM_SUPERVISOR_TARGET, TMUX_PANE, or HERDR_ENV/HERDR_PANE_ID); falling back to '$discovered' — verify this is firstmate's pane" >&2
   fi
-  FM_SUPERVISOR_TARGET="$discovered"
-  local TARGET="$FM_SUPERVISOR_TARGET"
-
   # --- validate supervisor target at startup (a missing target is a typo) ---
   # Dispatches through bin/fm-backend.sh instead of a raw `tmux display-message`
   # probe, so a herdr supervisor pane is checked via the herdr adapter; for
-  # backend=tmux this runs the exact same `tmux display-message -p -t "$TARGET"
-  # '#{pane_id}'` call as before.
-  if ! fm_backend_target_exists "$BACKEND" "$TARGET"; then
-    echo "error: supervisor target '$TARGET' does not resolve to a $BACKEND pane; set FM_SUPERVISOR_TARGET" >&2
-    log "startup failed: target '$TARGET' not found (backend=$BACKEND)"
+  # backend=tmux the check goes through the exact-pane resolver
+  # (fm_tmux_exact_pane), which reads an absent window or pane as missing. An
+  # operator `session:window.pane` override is pinned to that pane's id here, so
+  # every later exact read reaches the same pane.
+  local TARGET
+  if ! TARGET=$(fm_backend_operator_target "$BACKEND" "$discovered"); then
+    echo "error: supervisor target '$discovered' does not resolve to a $BACKEND pane; set FM_SUPERVISOR_TARGET" >&2
+    log "startup failed: target '$discovered' not found (backend=$BACKEND)"
     fm_lock_release "$LOCK" 2>/dev/null || true
     rm -f "$PIDFILE" 2>/dev/null || true
     exit 1
   fi
+  FM_SUPERVISOR_TARGET="$TARGET"
 
   local afk_status="off"
   afk_active "$STATE" && afk_status="on"

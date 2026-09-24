@@ -12,6 +12,8 @@
 # tests/git-config-helpers.sh - the shared helpers, bin/fm-test-run.sh's
 # per-suite wrapper, and the standalone scripts runnable without a live vendor.
 # That helper's header owns the contract and the layers it leaves in force.
+# It is likewise the tmux server isolation regression for
+# tests/tmux-isolation-helpers.sh, through the runner and tests/lib.sh.
 set -u
 
 # shellcheck source=tests/fixtures.sh
@@ -27,11 +29,13 @@ test_git_config_isolation() (
   cd "$dir/caller" || exit 1
   cp "$ROOT/bin/fm-test-run.sh" "$ROOT/bin/fm-timeout-lib.sh" "$dir/runner/bin/"
   cp "$ROOT/tests/git-config-helpers.sh" "$dir/runner/tests/"
+  cp "$ROOT/tests/tmux-isolation-helpers.sh" "$dir/runner/tests/"
   fakebin=$(fm_fakebin "$dir/standalone")
   fm_fake_exit0 "$fakebin" pi
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -eu
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 while [ "$#" -gt 0 ]; do
   if [ "$1" = -c ]; then
     git -C "$2" log -1 --format=%s > "${FM_TEST_STANDALONE_COMMIT:?}"
@@ -151,6 +155,64 @@ SH
   assert_host_config_still_governs system
 
   pass "runner and shared helpers isolate host Git config and preserve explicit config and outside commits"
+)
+
+# A suite started from inside a tmux pane must not reach that pane's server, even
+# with a bare `tmux kill-server`. The "host" server here is a private stand-in
+# placed where an inherited TMUX and TMUX_TMPDIR would both lead a bare tmux, so
+# a broken guard kills the stand-in rather than anything real.
+test_tmux_server_isolation() (
+  local dir="$TMP_ROOT/tmux-isolation" real host_dir host_sock host_pid probe private leftover
+  real=$(command -v tmux) || { echo "# tmux not installed; host-server isolation not exercised"; return 0; }
+  host_dir=$(mktemp -d /tmp/fm-host.XXXXXX) || fail "could not create the host stand-in directory"
+  host_sock="$host_dir/tmux-$(id -u)/default"
+  trap 'env -u TMUX -u TMUX_PANE "$real" -S "$host_sock" kill-server >/dev/null 2>&1; rm -rf "$host_dir"' EXIT
+  mkdir -m 700 "$host_dir/tmux-$(id -u)"
+  env -u TMUX -u TMUX_PANE "$real" -S "$host_sock" -f /dev/null new-session -d -s host 'sleep 600' \
+    || fail "could not start the host stand-in server"
+  host_pid=$(env -u TMUX -u TMUX_PANE "$real" -S "$host_sock" display-message -p '#{pid}')
+  host_alive() { env -u TMUX -u TMUX_PANE "$real" -S "$host_sock" has-session -t =host 2>/dev/null; }
+
+  mkdir -p "$dir/runner/bin" "$dir/runner/tests"
+  git init -q "$dir/caller"
+  cd "$dir/caller" || exit 1
+  cp "$ROOT/bin/fm-test-run.sh" "$ROOT/bin/fm-timeout-lib.sh" "$dir/runner/bin/"
+  cp "$ROOT/tests/git-config-helpers.sh" "$ROOT/tests/tmux-isolation-helpers.sh" "$dir/runner/tests/"
+  cat > "$dir/runner/tests/fm-tmux-probe.test.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n%s\n' "${TMUX-unset}" "${TMUX_TMPDIR-unset}" > "$FM_TEST_TMUX_PROBE"
+tmux kill-server >/dev/null 2>&1
+tmux -L default kill-server >/dev/null 2>&1
+tmux -L leftover -f /dev/null new-session -d -s left 'sleep 600' || exit 1
+tmux -L leftover display-message -p '#{pid}' >> "$FM_TEST_TMUX_PROBE"
+SH
+  probe="$dir/probe"
+  TMUX="$host_sock,$host_pid,0" TMUX_PANE=%0 TMUX_TMPDIR="$host_dir" FM_TEST_TMUX_PROBE="$probe" \
+    "$dir/runner/bin/fm-test-run.sh" tests/fm-tmux-probe.test.sh > "$dir/runner.log" 2>&1 \
+    || fail "runner did not run the tmux probe: $(cat "$dir/runner.log")"
+  host_alive || fail "a suite run by the runner killed the tmux server it was started under"
+  [ "$(sed -n 1p "$probe")" = unset ] || fail "the runner passed TMUX to its suite"
+  private=$(sed -n 2p "$probe")
+  case "$private" in
+    unset|"$host_dir") fail "the runner did not give its suite a private TMUX_TMPDIR (got '$private')" ;;
+  esac
+  [ ! -e "$private" ] || fail "the runner left its private tmux directory behind: $private"
+  leftover=$(sed -n 3p "$probe")
+  case "$leftover" in ''|*[!0-9]*) fail "the probe did not start its leftover server" ;; esac
+  ! kill -0 "$leftover" 2>/dev/null || fail "the runner left a suite's tmux server running (pid $leftover)"
+
+  # Expansion is intentionally deferred to the child bash.
+  # shellcheck disable=SC2016
+  TMUX="$host_sock,$host_pid,0" TMUX_PANE=%0 TMUX_TMPDIR="$host_dir" \
+    env -u FM_TEST_TMUX_TMPDIR -u FM_TEST_LIB_SOURCED bash -c '
+      . "$1"
+      [ -z "${TMUX+x}" ] || fail "tests/lib.sh kept TMUX"
+      [ "$TMUX_TMPDIR" != "$2" ] || fail "tests/lib.sh kept the inherited TMUX_TMPDIR"
+      tmux kill-server >/dev/null 2>&1
+      true' _ "$ROOT/tests/lib.sh" "$host_dir" \
+    || fail "tests/lib.sh did not isolate tmux"
+  host_alive || fail "a suite sourcing tests/lib.sh killed the tmux server it was started under"
+  pass "runner and tests/lib.sh keep every suite's tmux off the server it was started under"
 )
 
 test_touch_epoch_preserves_repeated_dst_hour() {
@@ -280,6 +342,7 @@ test_spawn_home_layout() {
 }
 
 test_git_config_isolation || fail "Git fixture config isolation"
+test_tmux_server_isolation || fail "tmux server isolation"
 test_touch_epoch_preserves_repeated_dst_hour
 test_no_mistakes_version_constant
 test_no_mistakes_init_doctor_markers

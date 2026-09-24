@@ -74,6 +74,7 @@ test_unacknowledged_recovery_is_announced_once_per_generation() {
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 exit 0
 SH
   chmod +x "$fakebin/tmux"

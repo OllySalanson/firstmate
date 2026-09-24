@@ -4794,6 +4794,7 @@ test_afk_busy_declared_pause_ticking_pane_hands_off_once() {
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 case "${1:-}" in
   list-windows)
     [ -n "${FM_FAKE_TMUX_WINDOW:-}" ] && printf '%s\n' "${FM_FAKE_TMUX_WINDOW#*:}"
@@ -4806,7 +4807,9 @@ case "${1:-}" in
   display-message)
     case "$*" in
       *pane_current_command*) printf '%s\n' "${FM_FAKE_TMUX_CURRENT_COMMAND:-}"; exit 0 ;;
-    esac ;;
+    esac
+    # Every other read answers empty from the same live pane.
+    exit 0 ;;
 esac
 exit 1
 SH

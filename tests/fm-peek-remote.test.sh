@@ -34,6 +34,7 @@ SH
   chmod +x "$fb/fake-ssh"
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 printf 'tmux\n' >> "${FM_FAKE_TMUX_TOUCHED:?}"
 exit 1
 SH

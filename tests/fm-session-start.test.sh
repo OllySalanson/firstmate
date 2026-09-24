@@ -303,6 +303,7 @@ make_fake_tmux() {
   cat > "$fakebin/tmux" <<SH
 #!/usr/bin/env bash
 set -u
+[ "\${1:-}" != list-panes ] || exec "\$FM_TEST_FAKE_TMUX_LIST_PANES" "\$0" "\$@"
 case "\${1:-}" in
   display-message)
     target=""
@@ -329,6 +330,7 @@ make_fake_tmux_secondmate_recovery() {
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 mode=${FM_FAKE_TMUX_MODE:?}
 log=${FM_FAKE_TMUX_LOG:?}
 spawned=${FM_FAKE_TMUX_SPAWNED:?}

@@ -47,6 +47,7 @@ make_stub() {  # <case-dir>
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 D=$FM_FAKE_DIR
 case "${1:-}" in
   send-keys)
@@ -60,6 +61,8 @@ case "${1:-}" in
         *) break ;;
       esac
     done
+    # State is keyed by window; a resolved pane id leads back to its window.
+    case "$target" in %*) target=$("$FM_TEST_FAKE_TMUX_LIST_PANES" --target-of "$target") ;; esac
     payload=${1:-}
     if [ "$literal" = 1 ]; then
       case "$payload" in
@@ -105,7 +108,10 @@ case "${1:-}" in
     target=
     prev=
     for a in "$@"; do
-      if [ "$prev" = -t ]; then target=$a; fi
+      if [ "$prev" = -t ]; then
+        target=$a
+        case "$target" in %*) target=$("$FM_TEST_FAKE_TMUX_LIST_PANES" --target-of "$target") ;; esac
+      fi
       case "$a" in
         *cursor_y*) printf '1\n'; exit 0 ;;
         *pane_current_command*)

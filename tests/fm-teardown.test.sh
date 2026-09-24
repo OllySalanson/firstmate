@@ -91,6 +91,7 @@ exit 0
 SH
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 # tmux kill-window etc.: succeed silently.
 exit 0
 SH
@@ -1214,6 +1215,7 @@ add_unreadable_tmux() {
   local case_dir=$1
   cat > "$case_dir/fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 case "${1:-}" in
   list-windows) echo "error connecting to fixture: permission denied" >&2 ; exit 1 ;;
 esac
@@ -2504,6 +2506,7 @@ test_forced_secondmate_teardown_holds_descendant_lifecycle_locks() {
   : > "$case_dir/treehouse.log"
   cat > "$case_dir/fakebin/tmux" <<SH
 #!/usr/bin/env bash
+[ "\${1:-}" != list-panes ] || exec "\$FM_TEST_FAKE_TMUX_LIST_PANES" "\$0" "\$@"
 printf '%s\n' "\$*" >> "$case_dir/kill.log"
 exit 0
 SH
@@ -3568,6 +3571,7 @@ test_lsof_absent_reaps_tmux_process_group() {
   kill -0 "$pid" 2>/dev/null || fail "lsof-absent-process-group-reap: setup sleeper did not start"
   cat > "$case_dir/fakebin/tmux" <<EOF
 #!/usr/bin/env bash
+[ "\${1:-}" != list-panes ] || exec "\$FM_TEST_FAKE_TMUX_LIST_PANES" "\$0" "\$@"
 if [ "\${1:-}" = display-message ] && [ "\${*: -1}" = '#{pane_pid}' ]; then
   printf '%s\n' '$pid'
 fi

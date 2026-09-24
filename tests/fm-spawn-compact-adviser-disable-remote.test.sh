@@ -51,6 +51,7 @@ CONTRARY=0
 # invocation verbatim.
 cat > "$REMOTE_ROOT/bin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 exit 0
 SH
 chmod +x "$REMOTE_ROOT/bin/tmux"

@@ -90,6 +90,7 @@ EOF
 
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 case "$*" in *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;; esac
 case "${1:-}" in display-message) printf 'firstmate\n'; exit 0 ;; esac
 exit 0
@@ -442,6 +443,7 @@ break_launch_delivery() {  # <case-dir>
   local case_dir=$1
   cat > "$case_dir/fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 case "$*" in *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;; esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
@@ -456,6 +458,7 @@ track_teardown_resource_actions() {  # <case-dir>
   local case_dir=$1
   cat > "$case_dir/fakebin/tmux" <<SH
 #!/usr/bin/env bash
+[ "\${1:-}" != list-panes ] || exec "\$FM_TEST_FAKE_TMUX_LIST_PANES" "\$0" "\$@"
 : > "$case_dir/backend-resource-action"
 exit 0
 SH
@@ -491,6 +494,7 @@ interrupt_kimi_readiness() {  # <case-dir>
   fm_fake_exit0 "$case_dir/fakebin" kimi
   cat > "$case_dir/fakebin/tmux" <<SH
 #!/usr/bin/env bash
+[ "\${1:-}" != list-panes ] || exec "\$FM_TEST_FAKE_TMUX_LIST_PANES" "\$0" "\$@"
 case "\$*" in
   *"#{pane_current_path}"*) printf '%s\\n' "\${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
   *"#{cursor_y}"*) printf '1\\n'; exit 0 ;;
@@ -908,6 +912,7 @@ test_dispatch_refuses_a_pending_authoritative_close() {
     "$id" "$(home_of "$case_dir")/data" > "$marker"
   cat > "$case_dir/fakebin/tmux" <<SH
 #!/usr/bin/env bash
+[ "\${1:-}" != list-panes ] || exec "\$FM_TEST_FAKE_TMUX_LIST_PANES" "\$0" "\$@"
 case "\$*" in
   *new-window*) : > "$case_dir/task-endpoint-created" ;;
   *treehouse\\ get*) : > "$case_dir/local-copy-requested" ;;
@@ -943,6 +948,7 @@ test_dispatch_refuses_a_held_row_before_creating_resources() {
     --file "$(backlog_of "$case_dir")" >/dev/null
   cat > "$case_dir/fakebin/tmux" <<SH
 #!/usr/bin/env bash
+[ "\${1:-}" != list-panes ] || exec "\$FM_TEST_FAKE_TMUX_LIST_PANES" "\$0" "\$@"
 case "\$*" in
   *new-window*) : > "$case_dir/task-endpoint-created" ;;
   *treehouse\\ get*) : > "$case_dir/local-copy-requested" ;;
@@ -978,6 +984,7 @@ test_dispatch_refuses_a_blocked_row_before_creating_resources() {
     --file "$(backlog_of "$case_dir")" >/dev/null
   cat > "$case_dir/fakebin/tmux" <<SH
 #!/usr/bin/env bash
+[ "\${1:-}" != list-panes ] || exec "\$FM_TEST_FAKE_TMUX_LIST_PANES" "\$0" "\$@"
 case "\$*" in
   *new-window*) : > "$case_dir/task-endpoint-created" ;;
   *treehouse\\ get*) : > "$case_dir/local-copy-requested" ;;
@@ -1013,6 +1020,7 @@ test_dispatch_refuses_a_held_in_flight_row_before_relaunch() {
     --file "$(backlog_of "$case_dir")" >/dev/null
   cat > "$case_dir/fakebin/tmux" <<SH
 #!/usr/bin/env bash
+[ "\${1:-}" != list-panes ] || exec "\$FM_TEST_FAKE_TMUX_LIST_PANES" "\$0" "\$@"
 case "\$*" in
   *new-window*) : > "$case_dir/task-endpoint-created" ;;
   *treehouse\\ get*) : > "$case_dir/local-copy-requested" ;;

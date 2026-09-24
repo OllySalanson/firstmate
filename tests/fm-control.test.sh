@@ -88,6 +88,7 @@ make_tmux_stub() {  # <dir> -> echoes fakebin dir
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
 D=$FM_FAKE_DIR
 # The rows devin 3000.11.1 renders for each modelled screen (live capture).
 devin_screen() {  # <running|armed|cancelled|idle|picker>
