@@ -54,6 +54,19 @@ test_sourced_script_ignores_callers_help_argument() {
   pass "the help path fires only when a script is executed, never when sourced"
 }
 
+test_remote_entrypoint_answers_help_through_installed_symlink() {
+  local link_dir out flag
+  link_dir="$TMP_ROOT/symlink-bin"
+  mkdir -p "$link_dir"
+  ln -s "$ROOT/bin/fm-remote-entrypoint.sh" "$link_dir/fm-remote-entrypoint.sh"
+  for flag in --help -h; do
+    out=$("$link_dir/fm-remote-entrypoint.sh" "$flag" 2>/dev/null) || fail "fm-remote-entrypoint.sh $flag via symlink exited nonzero"
+    assert_contains "$out" "Fixed remote entrypoint for bin/fm-on.sh." "fm-remote-entrypoint.sh $flag via symlink prints its usage"
+  done
+  pass "fm-remote-entrypoint.sh answers --help and -h when run through its installed symlink"
+}
+
 test_every_entrypoint_answers_help_without_side_effects
+test_remote_entrypoint_answers_help_through_installed_symlink
 test_send_help_prints_its_usage
 test_sourced_script_ignores_callers_help_argument
