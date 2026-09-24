@@ -30,7 +30,11 @@
 #            words are never dropped. Choice Context data is not a comment.
 #            Captain-supplied body lines are visibly prefixed so they cannot
 #            forge structural labels. Empty message and annotation sections
-#            are reported explicitly.
+#            are reported explicitly. Both published array forms are read: the
+#            tabular `prompts[N]{fields}:` rows and the expanded `prompts[N]:`
+#            list Lavish emits when an item carries a nested object such as a
+#            table-cell `target`; nested fields are printed as the item's
+#            prefixed `context:` lines.
 # poll       The registered listener command `arm` publishes, not a command to
 #            run in a conversational turn. It runs the published blocking poll
 #            and prints its response verbatim, absorbing only the one exact
@@ -656,6 +660,8 @@ cmd_reconciles() { cmd_choice_rows reconciles "$@"; }
 # as its own field; a selector must not hide the typed words, even when the
 # comment matches the captured element text. Choice rows keep Context data
 # out of that field. A pure annotation has no prompt.
+# An expanded-list item that breaks the list shape counts as malformed, so the
+# completeness verdict never certifies a capture it could not fully present.
 cmd_read() {
   local file=${1-} lifecycle session_ended
   [ -n "$file" ] || usage
@@ -666,51 +672,112 @@ cmd_read() {
     use strict; use warnings;
     my ($path, $lifecycle, $session_ended) = @ARGV;
     open my $fh, "<", $path or exit 1;
-    my (@fields, $want, @rows);
+    my ($want, $form, @fields, @rows);
     while (my $line = <$fh>) {
-      if (!@fields) {
-        next unless $line =~ /^(?:prompts|feedback)\[(\d+)\]\{([^}]*)\}:\s*$/;
-        ($want, @fields) = ($1, split /,/, $2);
+      if (!defined $form) {
+        if ($line =~ /^(?:prompts|feedback)\[(\d+)\]\{([^}]*)\}:\s*$/) {
+          ($want, $form, @fields) = ($1, "table", split /,/, $2);
+        } elsif ($line =~ /^(?:prompts|feedback)\[(\d+)\]:\s*$/) {
+          ($want, $form) = ($1, "list");
+        }
         next;
       }
       last unless $line =~ /^\s/;
-      last if defined($want) && @rows >= $want;
+      last if $form eq "table" && @rows >= $want;
       chomp $line;
       push @rows, $line;
     }
     close $fh;
     $want = 0 unless defined $want;
+    sub unescape {
+      my ($v) = @_;
+      $v =~ s/\\(.)/$1 eq "n" ? "\n" : $1 eq "t" ? "\t" : $1 eq "r" ? "\r" : $1/ge;
+      return $v;
+    }
     my @parsed;
     my $malformed = 0;
-    for my $row (@rows) {
-      $row =~ s/^\s+//;
-      my @vals;
-      while (length $row) {
-        if ($row =~ s/^"((?:[^"\\]|\\.)*)"//) {
-          push @vals, $1;
-        } else {
-          $row =~ s/^([^,]*)//;
-          push @vals, $1;
+    if (defined $form && $form eq "list") {
+      # Expanded list form: each item opens with `- key: value` at the block
+      # indent, its later fields sit two columns deeper, and a bare `key:`
+      # opens a nested object whose fields are recorded under dotted paths.
+      my ($base, $item, $bad, @stack);
+      my $finish = sub {
+        return unless $item;
+        $item->{f}{"-nested"} = $item->{nested} if @{$item->{nested}};
+        if ($bad || !%{$item->{f}}) { $malformed++ } else { push @parsed, $item->{f} }
+        ($item, $bad) = (undef, 0);
+      };
+      for my $row (@rows) {
+        $row =~ s/\s+$//;
+        next unless length $row;
+        my ($indent, $body) = $row =~ /^(\s*)(.*)$/;
+        my $depth = length $indent;
+        $base = $depth unless defined $base;
+        if ($depth == $base && $body =~ s/^-(?:\s+|$)//) {
+          $finish->();
+          last if @parsed + $malformed >= $want;
+          $item = { f => {}, nested => [] };
+          @stack = ([$base + 2, ""]);
+          $depth = $base + 2;
+          next unless length $body;
+        } elsif (!$item || $depth < $base + 2) {
+          if ($item) { $bad = 1 } else { $malformed++ }
+          next;
         }
-        last unless $row =~ s/^,//;
-      }
-      if (@vals > @fields) {
-        my ($preserve) = grep { $fields[$_] eq "prompt" } 0 .. $#fields;
-        ($preserve) = grep { $fields[$_] eq "text" } 0 .. $#fields unless defined $preserve;
-        if (defined $preserve) {
-          my $count = @vals - @fields + 1;
-          my @parts = splice @vals, $preserve, $count;
-          splice @vals, $preserve, 0, join(",", @parts);
+        pop @stack while @stack > 1 && $stack[-1][0] > $depth;
+        if ($stack[-1][0] != $depth
+          || $body !~ /^("(?:[^"\\]|\\.)*"|[A-Za-z_][\w.-]*):(?:\s+(.*))?$/) {
+          $bad = 1;
+          next;
         }
+        my ($key, $value) = ($1, $2);
+        $key = unescape($1) if $key =~ /^"(.*)"$/;
+        my $path = $stack[-1][1] . $key;
+        if (!defined $value || !length $value) {
+          push @stack, [$depth + 2, "$path."];
+          next;
+        }
+        if ($value =~ /^"((?:[^"\\]|\\.)*)"$/) {
+          $value = unescape($1);
+        } elsif ($value =~ /^"/) {
+          $bad = 1;
+          next;
+        }
+        $item->{f}{$path} = $value;
+        push @{$item->{nested}}, [$path, $value] if $path =~ /\./;
       }
-      if (@vals != @fields) {
-        $malformed++;
-        next;
+      $finish->();
+    } else {
+      for my $row (@rows) {
+        $row =~ s/^\s+//;
+        my @vals;
+        while (length $row) {
+          if ($row =~ s/^"((?:[^"\\]|\\.)*)"//) {
+            push @vals, $1;
+          } else {
+            $row =~ s/^([^,]*)//;
+            push @vals, $1;
+          }
+          last unless $row =~ s/^,//;
+        }
+        if (@vals > @fields) {
+          my ($preserve) = grep { $fields[$_] eq "prompt" } 0 .. $#fields;
+          ($preserve) = grep { $fields[$_] eq "text" } 0 .. $#fields unless defined $preserve;
+          if (defined $preserve) {
+            my $count = @vals - @fields + 1;
+            my @parts = splice @vals, $preserve, $count;
+            splice @vals, $preserve, 0, join(",", @parts);
+          }
+        }
+        if (@vals != @fields) {
+          $malformed++;
+          next;
+        }
+        $_ = unescape($_) for @vals;
+        my %f;
+        $f{$fields[$_]} = $vals[$_] for 0 .. $#fields;
+        push @parsed, \%f;
       }
-      s/\\(.)/$1 eq "n" ? "\n" : $1 eq "t" ? "\t" : $1 eq "r" ? "\r" : $1/ge for @vals;
-      my %f;
-      $f{$fields[$_]} = $vals[$_] for 0 .. $#fields;
-      push @parsed, \%f;
     }
     my $presented = scalar @parsed;
     my $complete = ($presented == $want && !$malformed) ? "yes" : "no";
@@ -779,6 +846,10 @@ cmd_read() {
         if ($tag ne "choice" && length $comment) {
           print "prompt:\n";
           emit_body($comment);
+        }
+        if ($f->{"-nested"}) {
+          print "context:\n";
+          emit_body(join "\n", map { "$_->[0]: $_->[1]" } @{$f->{"-nested"}});
         }
       }
       print "END ANNOTATIONS\n";
