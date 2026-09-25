@@ -1,0 +1,5 @@
+ok - Scenario A: partial input defers injection; digest arrives clean after idle
+ok - Scenario B: swallowed Enter produces exactly one clean digest
+ok - Scenario C: a normal captain status injects exactly one clean single-line sentinel digest
+tests/fm-afk-inject-e2e.test.sh: line 594: escalate_digest: command not found
+not ok - Scenario D: escalate_digest failed

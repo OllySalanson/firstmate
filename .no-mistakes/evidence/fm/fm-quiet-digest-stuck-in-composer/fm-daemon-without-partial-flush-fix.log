@@ -1,0 +1,99 @@
+ok - fm-afk-start.sh fails before daemon startup when the afk flag cannot be written
+ok - fm-afk-start.sh ignores stale pidfile-only live pids
+ok - fm-afk-start.sh reclaims stale daemon locks whose live pid identity no longer matches
+ok - supervise daemon state root is scoped by FM_HOME
+ok - routine signal self-handles
+ok - captain-relevant status verbs escalate
+ok - check + unknown escalate; heartbeat self-handles
+ok - transient stale self-handles and records a persistence marker
+ok - enriched stale wedges bypass status absorption except under a declared wait, without disturbing busy workers
+ok - an enriched wedge under a declared wait uses the pause cadence and restores wedge detection on resume
+ok - stale + terminal status escalates immediately
+ok - stale escalation and current wait cadence remain independent
+ok - paused reasons with captain phrases remain pause-classified
+ok - a captain-held transfer classifies as pause, not as a wedge candidate
+ok - handle_wake on a paused stale records a pause marker, drops the wedge marker, and does not escalate
+ok - handle_wake records a declared pause from a routine signal for long-cadence rechecks
+ok - a terminal signal clears pause and stale tracking across both supervisors
+ok - housekeeping migrates a normal-watcher's declared pause into daemon tracking
+ok - housekeeping clears an already-resumed watcher pause across both supervisors
+ok - housekeeping seeds pause tracking from status without a watcher marker
+ok - persistent stale escalates after threshold and clears its marker
+ok - resumed (busy) stale clears its marker without escalating
+ok - housekeeping re-surfaces a stale declared pause on the long cadence and resets its window
+ok - housekeeping re-surfaces a forgotten captain hold on the long cadence and resets its window
+ok - a busy pane cannot gate the pause clear once its crew's status no longer declares the wait
+ok - housekeeping matures a busy pane's declared-wait window into exactly one recheck per window
+ok - housekeeping bounds a distant declared time, defers to a near one, and rechecks a passed one at once
+ok - housekeeping clears a paused marker once the crew is no longer declaring the pause
+ok - housekeeping clears the pause marker once a captain hold is answered
+ok - housekeeping moves an existing stale marker to pause before wedge escalation
+ok - housekeeping moves a captain hold's existing stale marker to pause before wedge escalation
+ok - housekeeping clears tracking when a crew leaves pause
+ok - persistent herdr stale resolves the target from metadata and escalates
+ok - herdr idle busy-footer stale clears through capture corroboration
+ok - resumed herdr stale clears through backend-aware busy state
+ok - persistent Orca stale resolves the terminal from metadata
+ok - multiple escalations flush as a single batched digest
+ok - batch flush measures max-delay from the first append, not the last
+ok - catch-all scan escalates a missed terminal once, not twice
+ok - handle_wake routes routine->self and captain->escalate
+ok - a decision-owned queued row escalates once as the decision, then suppresses until the status changes
+ok - a captain-held decision-owned row is self-handled without escalation, now and on repeat
+ok - INJECT_SKIP forces self-handle, bypassing captain-relevant classification
+ok - is_wake_reason distinguishes watcher wake reasons from singleton-status stdout
+ok - terminal-stale escalate removes its marker so housekeeping does not re-escalate
+ok - captain signal escalate marks seen so the catch-all scan does not re-fire
+ok - _collapse_newlines replaces newlines with literal separator
+ok - afk flag absent: daemon does not inject, buffer preserved
+ok - busy-guard defers injection when supervisor pane is busy
+ok - marker detection: marker -> stay afk, no marker -> exit afk
+ok - /afk invocation is exempt from afk exit (no self-cancel)
+ok - should_exit_afk returns false when afk is not active
+ok - strip_injection_marker removes the sentinel marker cleanly
+ok - pane_input_pending detects partial input on the cursor line
+ok - pane_input_pending: a blank unidentified cursor row defers (strict container-proof rule)
+ok - pane_input_pending: only proven empty agent prompts pass
+ok - fm_tmux_composer_state: a bare shell prompt ($/%/#/>) reads unknown, never empty (dead-shell injection safety)
+ok - fm_tmux_composer_state: a bordered composer box and bare agent glyphs (❯/›) still read empty
+ok - fm_tmux_composer_state: only matching edge borders form a composer box
+ok - pane_input_pending preserves bright placeholder-like drafts in styled captures
+ok - classify_signal dedupes against the catch-all scan seen marker
+ok - turn-end markers stay routine while mixed actionable status batches escalate
+ok - an actionable event is escalated to an away captain despite later routine appends
+ok - the daemon commits exactly the endpoint captured by classification
+ok - a stale wake escalates a blocker hidden by later progress
+ok - a stale span read failure surfaces without advancing its marker
+ok - a recreated status rejects the old captured identity
+ok - an unverifiable status identity surfaces without advancing markers
+ok - a status read failure surfaces without advancing the daemon suppressor
+ok - catch-all routine scans advance before later actionable appends
+ok - failed escalation writes retain durable wakes and classification positions
+ok - catch-all markers advance only after escalation buffering succeeds
+ok - classification failure retains the complete durable wake batch
+ok - missing-status stale wakes remain ordinary and acknowledgeable
+ok - transient unreadable signals recover without advancing their position
+ok - daemon catch-all reclassifies permission-recovered status content
+ok - a permanent classification failure is reported, acknowledged, and never advances its position
+ok - the away-mode catch-all scan surfaces a masked event once
+ok - classify_stale dedupes against the signal path seen marker
+ok - AFK nonterminal working:+merged keeps wedge aging and re-escalates at bound
+ok - genuine done: and merge-check events still escalate
+ok - pane_input_pending: an idle bordered composer is NOT pending (afk-invx-i5)
+ok - pane_input_pending: text inside a bordered composer is still pending
+ok - submit-ACK confirms a submit when the composer returns to a bordered-empty box
+ok - submit-ACK reports pending on a persistently swallowed Enter (type-once)
+ok - max-defer on an empty stuck pane types once, alarms, and preserves the buffer
+ok - max-defer flushes and clears the buffer on an empty bordered pane
+ok - max-defer on a pending composer alarms without typing
+ok - normal flush clears a stale wedge marker
+ok - escalate_digest: a batch within the bound goes out whole in one digest
+ok - escalate_digest: a long batch takes the leading items that fit FM_INJECT_MAX_BYTES
+ok - escalate_digest: one oversized item is cut on a UTF-8 boundary and says how much was cut
+ok - escalate_flush: items beyond one digest stay buffered and follow in later digests
+not ok - a successful partial flush raised a wedge alarm: fm away-mode inject WEDGED: 400s undelivered as of 2026-09-25T19:15:48+0100
+The supervisor pane could not accept an escalation. Buffered items:
+done: PR https://github.com/o/r/pull/5 checks green; merged PRs #400 #401 #402 #403 #404 #405 #406 #407 #408 #409 #410 | item 5
+done: PR https://github.com/o/r/pull/6 checks green; merged PRs #400 #401 #402 #403 #404 #405 #406 #407 #408 #409 #410 | item 6
+done: PR https://github.com/o/r/pull/7 checks green; merged PRs #400 #401 #402 #403 #404 #405 #406 #407 #408 #409 #410 | item 7
+done: PR https://github.com/o/r/pull/8 checks green; merged PRs #400 #401 #402 #403 #404 #405 #406 #407 #408 #409 #410 | item 8

@@ -1,0 +1,7 @@
+ok - Scenario A: partial input defers injection; digest arrives clean after idle
+ok - Scenario B: swallowed Enter produces exactly one clean digest
+ok - Scenario C: a normal captain status injects exactly one clean single-line sentinel digest
+ok - Scenario D: a long digest with # and | wrapped rows submits on a Claude-shaped composer, in bounded digests
+ok - Scenario E: a submit that cannot be confirmed clears its own digest, keeps the escalation, and retries cleanly
+ok - Scenario F: text the captain typed is never typed over and never cleared
+all e2e injection tests passed

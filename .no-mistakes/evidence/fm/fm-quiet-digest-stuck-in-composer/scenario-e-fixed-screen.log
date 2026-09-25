@@ -1,0 +1,46 @@
+--- pane after failed submit (fixed):
+submitted 0
+Removed 1 invisible character - review and press Enter to send
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+--- daemon log:
+[2026-09-25T19:16:47+0100] inject failed: submit unconfirmed after 3 retries (verdict=pending); cleared the unsent digest from the composer
+---
+ok - Scenario E: a submit that cannot be confirmed clears its own digest, keeps the escalation, and retries cleanly
+all e2e injection tests passed

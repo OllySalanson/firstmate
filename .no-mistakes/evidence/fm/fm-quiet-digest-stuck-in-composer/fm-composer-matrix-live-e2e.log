@@ -1,0 +1,20 @@
+# claude pane tail at failure:
+#    Accessing workspace:
+#    /home/ollys/.no-mistakes/worktrees/2c249179ad74/01M3CW1483H1C7WA525KSK9NRD
+#    Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's in this folder first.
+#    Claude Code'll be able to read, edit, and execute files here.
+#    Security guide
+#    ❯ No, exit
+#      Yes, I trust this folder
+#    Enter to confirm · Esc to cancel
+not ok - claude (2.1.282 (Claude Code)): idle composer never classified empty (last verdict: pending)
+# harness absent, not verified here: codex
+# harness absent, not verified here: opencode
+# harness absent, not verified here: pi
+# harness absent, not verified here: grok
+# harness absent, not verified here: kimi
+# harness absent, not verified here: muse
+not ok - claude (2.1.282 (Claude Code)): wrapped-draft check never saw an idle composer (last verdict: pending)
+ok - strict posture live: a blank shell row classifies unknown and injection defers
+# harness absent, not verified here: zellij (false-positive regression not exercised)
+not ok - live composer-matrix guard observed failures above
