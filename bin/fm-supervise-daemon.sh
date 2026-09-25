@@ -797,10 +797,12 @@ escalate_digest() {  # <item>... (at least one)
 # supervisor pane, one bounded digest per call (escalate_digest). Returns 0
 # when the buffer is empty or its leading items were delivered, and non-zero on
 # inject failure (buffer preserved for retry / catch-up). Items beyond one
-# digest stay buffered, keep their first-append time, and go out on the next
-# flush once the pane is idle again.
+# digest stay buffered and go out on the next flush once the pane is idle
+# again. Their undelivered age restarts at the confirmed delivery, backdated by
+# one batch window so the next batch flush is already due while max-defer and
+# the wedge alarm measure time since the last successful delivery.
 escalate_flush() {  # <state>
-  local state=$1 buf line tmp
+  local state=$1 buf line tmp batch
   local -a items=()
   buf="$state/.subsuper-escalations"
   [ -s "$buf" ] || return 0
@@ -819,6 +821,9 @@ escalate_flush() {  # <state>
   fi
   tmp="${buf}.tmp.$$"
   printf '%s\n' "${items[@]:$ESCALATE_DIGEST_TAKEN}" > "$tmp" && mv -f "$tmp" "$buf"
+  batch=${FM_ESCALATE_BATCH_SECS:-$ESCALATE_BATCH_SECS_DEFAULT}
+  [ "$batch" -gt 0 ] || batch=0
+  echo $(( $(_now) - batch )) > "${buf}.since"
   return 0
 }
 

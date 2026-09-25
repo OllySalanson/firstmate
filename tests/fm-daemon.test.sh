@@ -2231,6 +2231,29 @@ test_escalate_flush_keeps_items_beyond_one_digest() {
   pass "escalate_flush: items beyond one digest stay buffered and follow in later digests"
 }
 
+test_partial_flush_past_max_defer_does_not_raise_wedge() {
+  local dir state fakebin sent i since
+  dir=$(make_bordered_case partial-flush-no-wedge)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  sent="$dir/sent.log"; : > "$sent"
+  for i in 1 2 3 4 5 6 7 8; do
+    escalate_add "$state" "done: PR https://github.com/o/r/pull/$i checks green; merged PRs #400 #401 #402 #403 #404 #405 #406 #407 #408 #409 #410 | item $i"
+  done
+  echo $(( $(date +%s) - 400 )) > "$state/.subsuper-escalations.since"
+  afk_enter "$state"
+  PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
+    FM_FAKE_BUSY_AFTER_ENTER=1 FM_ESCALATE_BATCH_SECS=90 FM_MAX_DEFER_SECS=300 \
+    FM_INJECT_CONFIRM_SLEEP=0.05 housekeeping "$state"
+  [ "$(grep -c 'Supervisor escalate' "$sent")" -eq 1 ] || fail "expected one digest delivered, got: $(cat "$sent")"
+  [ -s "$state/.subsuper-escalations" ] || fail "items beyond the first digest were dropped"
+  [ ! -e "$state/.subsuper-inject-wedged" ] \
+    || fail "a successful partial flush raised a wedge alarm: $(cat "$state/.subsuper-inject-wedged")"
+  since=$(_oldest_line_age "$state/.subsuper-escalations")
+  [ "$since" -ge 90 ] && [ "$since" -lt 300 ] \
+    || fail "the kept remainder's age ($since s) is not due for the next batch yet under max-defer"
+  pass "a partial flush past max-defer restarts the remainder's clock and raises no wedge alarm"
+}
+
 test_below_max_defer_does_nothing() {
   local dir state fakebin sent capture
   dir=$(make_supercase below-maxdefer)
@@ -2965,6 +2988,7 @@ test_escalate_digest_keeps_small_batches_whole
 test_escalate_digest_bounds_typed_bytes
 test_escalate_digest_cuts_one_oversized_item_on_a_utf8_boundary
 test_escalate_flush_keeps_items_beyond_one_digest
+test_partial_flush_past_max_defer_does_not_raise_wedge
 test_below_max_defer_does_nothing
 test_max_defer_afk_inactive_does_not_flush_or_alarm
 test_wedge_alarm_library_mode_defaults_to_discard
