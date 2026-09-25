@@ -291,6 +291,9 @@ case "${1:-}" in
       else
         [ -n "${FM_FAKE_SENT:-}" ] && printf '[ENTER]\n' >> "$FM_FAKE_SENT"
         write_composer ""
+        if [ "${FM_FAKE_BUSY_AFTER_ENTER:-0}" = 1 ]; then
+          printf 'esc to interrupt\n%s\n' "$(cat "$COMPOSER")" > "$COMPOSER"
+        fi
       fi
     elif [ "$lit" = 1 ]; then
       [ "${FM_FAKE_SEND_FAIL:-0}" = 1 ] && exit 1

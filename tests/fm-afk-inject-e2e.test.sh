@@ -421,8 +421,261 @@ test_scenario_c() {
   pass "Scenario C: a normal captain status injects exactly one clean single-line sentinel digest"
 }
 
+# --- Claude-shaped composer scenarios (D, E, F) -----------------------------
+# Claude Code 2.1.28x draws its composer as a `─` rule pair around `❯` and the
+# draft, wraps a long single-line draft onto indented rows, strips U+2063 on the
+# first Enter without submitting ("Removed 1 invisible character"), and deletes
+# one wrapped row per Ctrl+U (all measured live on 2.1.282 in tmux,
+# 2026-09-25). claude-loop.sh reproduces exactly those behaviors, so these
+# scenarios pin with real tmux and no harness the away digest that was left
+# typed but unsent in the captain's composer: its wrapped rows started with `#`
+# and `|`, the composer read unknown, and the second Enter never came.
+# They drive the daemon's own flush in-process against that pane; the daemon
+# process scenarios above own the watcher-to-digest path.
+
+CLAUDE_COLS=100
+CLAUDE_WIDTH=$((CLAUDE_COLS - 2))
+CLAUDE_LOG="$STATE_DIR/claude-submitted.log"
+CLAUDE_NO_SUBMIT="$STATE_DIR/.claude-no-submit"
+CLAUDE_LOOP="$STATE_DIR/claude-loop.sh"
+cat > "$CLAUDE_LOOP" <<'LOOP'
+#!/usr/bin/env bash
+# claude-loop.sh <submitted-log> <no-submit-flag> <columns>
+MARK=$'\xE2\x81\xA3'
+LOG=$1 NO_SUBMIT=$2 COLS=$3
+WIDTH=$((COLS - 2))
+OLD_STTY=$(stty -g 2>/dev/null || true)
+[ -z "$OLD_STTY" ] || stty -echo -icanon min 1 time 0 2>/dev/null || true
+restore() { [ -z "$OLD_STTY" ] || stty "$OLD_STTY" 2>/dev/null || true; }
+trap restore EXIT
+trap 'exit 0' INT TERM
+RULE=
+while [ "${#RULE}" -lt "$COLS" ]; do RULE="${RULE}-"; done
+RULE=${RULE//-/$'\xe2\x94\x80'}
+_buf= _notice= _count=0
+# Claude's screen: a notice row above the top rule once U+2063 was stripped,
+# `❯` + NBSP when empty, the draft wrapped at WIDTH with a two-column indent,
+# the closing rule, a footer, and the cursor at the end of the draft.
+redraw() {
+  local shown=${_buf//$MARK/} row=0 top=3 len last=0 col
+  printf '\033[H\033[2J'
+  printf 'submitted %s\r\n' "$_count"
+  if [ -n "$_notice" ]; then printf '%s\r\n' "$_notice"; top=4; fi
+  printf '%s\r\n' "$RULE"
+  if [ -z "$shown" ]; then
+    printf '\xe2\x9d\xaf\xc2\xa0\r\n'
+  else
+    printf '\xe2\x9d\xaf %s\r\n' "${shown:0:WIDTH}"
+    row=1
+    while [ "$((row * WIDTH))" -lt "${#shown}" ]; do
+      printf '  %s\r\n' "${shown:$((row * WIDTH)):WIDTH}"
+      row=$((row + 1))
+    done
+  fi
+  printf '%s\r\n' "$RULE"
+  printf '  ? for shortcuts'
+  len=${#shown}
+  [ "$len" -eq 0 ] || last=$(((len - 1) / WIDTH))
+  col=$((3 + len - last * WIDTH))
+  [ "$col" -le "$COLS" ] || col=$COLS
+  printf '\033[%d;%dH' "$((top + last))" "$col"
+}
+# Enter: the first one on a marked draft only strips the mark; the no-submit
+# flag makes Enter do nothing at all (a submit that never lands).
+submit() {
+  case "$_buf" in
+    *"$MARK"*)
+      _buf=${_buf//$MARK/}
+      _notice='Removed 1 invisible character - review and press Enter to send'
+      return
+      ;;
+  esac
+  [ ! -e "$NO_SUBMIT" ] || return
+  [ -n "$_buf" ] || return
+  printf '%s\n' "$_buf" >> "$LOG"
+  _count=$((_count + 1))
+  _buf= _notice=
+}
+# Ctrl+U: delete back to the start of the current wrapped row.
+delete_row() {
+  local len=${#_buf} cut
+  [ "$len" -gt 0 ] || return
+  cut=$((len % WIDTH))
+  [ "$cut" -gt 0 ] || cut=$WIDTH
+  _buf=${_buf:0:$((len - cut))}
+}
+redraw
+while IFS= read -r -n 1 _ch; do
+  case "$_ch" in
+    ''|$'\r'|$'\n') submit ;;
+    $'\x15') delete_row ;;
+    $'\177'|$'\b') _buf=${_buf%?} ;;
+    *) _buf="${_buf}${_ch}" ;;
+  esac
+  # Draw once per burst, not once per key.
+  read -r -t 0 || redraw
+done
+LOOP
+chmod +x "$CLAUDE_LOOP"
+: > "$CLAUDE_LOG"
+"$REAL_TMUX" -L "$SOCKET" new-session -d -s claude -x "$CLAUDE_COLS" -y 40 \
+  "bash '$CLAUDE_LOOP' '$CLAUDE_LOG' '$CLAUDE_NO_SUBMIT' '$CLAUDE_COLS'"
+CLAUDE_PANE=$("$REAL_TMUX" -L "$SOCKET" display-message -p -t claude '#{pane_id}')
+sleep 0.5
+
+claude_call() {  # <function> [args...]: run a daemon function against the claude pane
+  PATH="$TMUX_SHIM_DIR:$PATH" FM_STATE_OVERRIDE="$STATE_DIR" \
+    FM_SUPERVISOR_TARGET="$CLAUDE_PANE" FM_SUPERVISOR_BACKEND=tmux \
+    FM_INJECT_CONFIRM_SLEEP=0.3 FM_INJECT_CONFIRM_RETRIES=3 LOG="$STATE_DIR/claude-inject.log" \
+    "$@"
+}
+
+claude_screen() {
+  "$REAL_TMUX" -L "$SOCKET" capture-pane -p -t "$CLAUDE_PANE"
+}
+
+claude_state() {
+  claude_call fm_tmux_composer_state "$CLAUDE_PANE"
+}
+
+wait_claude_state() {  # <verdict>
+  local i=0
+  while [ "$i" -lt 30 ]; do
+    [ "$(claude_state)" = "$1" ] && return 0
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+claude_reset() {
+  local i=0
+  rm -f "$CLAUDE_NO_SUBMIT" "$STATE_DIR"/.subsuper-* "$STATE_DIR/claude-inject.log"
+  while [ "$i" -lt 30 ] && [ "$(claude_state)" != empty ]; do
+    "$REAL_TMUX" -L "$SOCKET" send-keys -t "$CLAUDE_PANE" C-u
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ "$(claude_state)" = empty ] || fail "claude-shaped pane did not return to an empty composer"
+  : > "$CLAUDE_LOG"
+  afk_enter "$STATE_DIR"
+}
+
+# Three items that take two digests under the default bound. The first is laid
+# out so that, behind the two-digest header, one wrapped row of the typed digest
+# starts with `#412` and the next starts with the ` | ` separator: the two row
+# shapes that read as a dead-shell prompt and a structural edge outside a
+# composer.
+claude_items() {
+  local head="FIRSTMATE_OP: v1 away-supervisor: Supervisor escalate (2 of 3 event(s); 1 more follow): "
+  local pad1 item1 fill
+  pad1=$(printf '%*s' "$((CLAUDE_WIDTH - ${#head}))" '' | tr ' ' 'a')
+  item1="${pad1}#412 #413 #414 merged into release"
+  fill=$((2 * CLAUDE_WIDTH - ${#head} - ${#item1} - 1))
+  item1="${item1}$(printf '%*s' "$fill" '' | tr ' ' 'b')"
+  printf '%s\n' "$item1"
+  printf '%s\n' "signal: rr-edge-redeploy.status: done: deployed mcp from main ff5cbdd; verified mcp ACTIVE v22->v23, rejects unauthenticated calls, read-only search_products OK; clerk-process untouched on v32; FYI the L-Foot + 2x M8 T-Nut 'Box of 320' variant has no SKU and is priced GBP 15, so box-packing skips it and quotes are unaffected"
+  printf '%s\n' "check: merge landed: rr-flat-roof-tnuts-fix https://example.test/pr/12 away -> check: merge landed: rr-flat-roof-tnuts-fix https://example.test/pr/12 away; the deploy of every edge function that bundles packages/calc follows once the release branch is cut and checks are green"
+}
+
+test_scenario_d() {
+  local item encoded line n rc screen
+  local -a items
+  claude_reset
+  while IFS= read -r item; do escalate_add "$STATE_DIR" "$item"; done <<EOF
+$(claude_items)
+EOF
+
+  # The layout this scenario exists for must really be on screen: type the
+  # first digest by hand and assert its `#` and `|` rows, then clear it through
+  # the same payload-proven clear the daemon uses.
+  items=()
+  while IFS= read -r item; do items+=("$item"); done < "$STATE_DIR/.subsuper-escalations"
+  escalate_digest "${items[@]}" || fail "Scenario D: escalate_digest failed"
+  fm_operational_input_encode away-supervisor "$ESCALATE_DIGEST" encoded
+  "$REAL_TMUX" -L "$SOCKET" send-keys -t "$CLAUDE_PANE" -l "$encoded"
+  wait_claude_state pending || fail "Scenario D: the wrapped digest did not read pending (got $(claude_state))"
+  screen=$(claude_screen)
+  printf '%s\n' "$screen" | grep -q '^  #412 ' \
+    || fail "Scenario D: no wrapped row starts with #412; the layout drifted: $screen"
+  printf '%s\n' "$screen" | grep -q '^  | ' \
+    || fail "Scenario D: no wrapped row starts with the | separator; the layout drifted: $screen"
+  claude_call fm_backend_composer_clear_payload tmux "$CLAUDE_PANE" "$encoded" \
+    || fail "Scenario D: the payload-proven clear did not empty a composer holding only the digest"
+  [ "$(claude_state)" = empty ] || fail "Scenario D: composer not empty after the clear"
+
+  claude_call escalate_flush "$STATE_DIR"; rc=$?
+  [ "$rc" -eq 0 ] || fail "Scenario D: first flush failed: $(cat "$STATE_DIR/claude-inject.log" 2>/dev/null)"
+  [ "$(wc -l < "$CLAUDE_LOG" | tr -d ' ')" -eq 1 ] || fail "Scenario D: expected one submission, got: $(cat "$CLAUDE_LOG")"
+  line=$(sed -n 1p "$CLAUDE_LOG")
+  case "$line" in
+    "FIRSTMATE_OP: v1 away-supervisor: Supervisor escalate (2 of 3 event(s); 1 more follow): "*"#412 #413 #414"*" | signal: rr-edge-redeploy"*) ;;
+    *) fail "Scenario D: first digest is not the two leading items: $line" ;;
+  esac
+  n=$(printf '%s' "$line" | wc -c | tr -d ' ')
+  [ "$((n + 3))" -le 760 ] || fail "Scenario D: first digest typed $((n + 3)) bytes, over the 760-byte bound"
+  [ "$(wc -l < "$STATE_DIR/.subsuper-escalations" | tr -d ' ')" -eq 1 ] \
+    || fail "Scenario D: the third item did not stay buffered: $(cat "$STATE_DIR/.subsuper-escalations")"
+  [ "$(claude_state)" = empty ] || fail "Scenario D: text left in the composer after a delivered digest"
+
+  claude_call escalate_flush "$STATE_DIR" || fail "Scenario D: second flush failed"
+  [ "$(wc -l < "$CLAUDE_LOG" | tr -d ' ')" -eq 2 ] || fail "Scenario D: expected two submissions, got: $(cat "$CLAUDE_LOG")"
+  case "$(sed -n 2p "$CLAUDE_LOG")" in
+    "FIRSTMATE_OP: v1 away-supervisor: Supervisor escalate (1 event(s)): check: merge landed: rr-flat-roof-tnuts-fix"*) ;;
+    *) fail "Scenario D: second digest is not the remaining item: $(sed -n 2p "$CLAUDE_LOG")" ;;
+  esac
+  [ ! -s "$STATE_DIR/.subsuper-escalations" ] || fail "Scenario D: buffer not empty after both digests"
+  pass "Scenario D: a long digest with # and | wrapped rows submits on a Claude-shaped composer, in bounded digests"
+}
+
+test_scenario_e() {
+  claude_reset
+  touch "$CLAUDE_NO_SUBMIT"
+  escalate_add "$STATE_DIR" "needs-decision: pick A or B for merged PRs #400 #401 #402 #403 #404 #405 #406 #407 #408 #409 #410 #411 #412 #413 #414 #415 #416 #417 #418 #419 #420"
+  claude_call escalate_flush "$STATE_DIR" && fail "Scenario E: a submit that never landed reported delivery"
+  [ ! -s "$CLAUDE_LOG" ] || fail "Scenario E: something was submitted: $(cat "$CLAUDE_LOG")"
+  [ "$(claude_state)" = empty ] || fail "Scenario E: the unsent digest was left in the composer: $(claude_screen)"
+  claude_screen | grep -q 'FIRSTMATE_OP' && fail "Scenario E: digest text still visible: $(claude_screen)"
+  grep -q 'cleared the unsent digest' "$STATE_DIR/claude-inject.log" \
+    || fail "Scenario E: the daemon log does not record the clear: $(cat "$STATE_DIR/claude-inject.log")"
+  grep -q 'pick A or B' "$STATE_DIR/.subsuper-escalations" || fail "Scenario E: the escalation was dropped from the buffer"
+
+  rm -f "$CLAUDE_NO_SUBMIT"
+  claude_call escalate_flush "$STATE_DIR" || fail "Scenario E: the retry after a cleared failure did not deliver"
+  [ "$(wc -l < "$CLAUDE_LOG" | tr -d ' ')" -eq 1 ] || fail "Scenario E: expected exactly one delivery, got: $(cat "$CLAUDE_LOG")"
+  grep -c 'FIRSTMATE_OP' "$CLAUDE_LOG" | grep -qx 1 || fail "Scenario E: the retried digest was duplicated: $(cat "$CLAUDE_LOG")"
+  pass "Scenario E: a submit that cannot be confirmed clears its own digest, keeps the escalation, and retries cleanly"
+}
+
+test_scenario_f() {
+  local encoded
+  claude_reset
+  # A draft the captain typed: the digest is never typed and never cleared.
+  "$REAL_TMUX" -L "$SOCKET" send-keys -t "$CLAUDE_PANE" -l "captain draft #412 | keep me"
+  wait_claude_state pending || fail "Scenario F: the captain draft did not read pending"
+  escalate_add "$STATE_DIR" "done: PR https://example.test/pr/400"
+  claude_call escalate_flush "$STATE_DIR" && fail "Scenario F: the digest was delivered over a captain draft"
+  claude_screen | grep -q 'captain draft #412' || fail "Scenario F: the captain draft was changed: $(claude_screen)"
+  claude_screen | grep -q 'FIRSTMATE_OP' && fail "Scenario F: the digest was typed into the captain draft"
+
+  # The captain types behind an unsent digest: the clear refuses, because the
+  # composer no longer shows exactly the digest.
+  claude_reset
+  fm_operational_input_encode away-supervisor "Supervisor escalate (1 event(s)): done: PR https://example.test/pr/401" encoded
+  "$REAL_TMUX" -L "$SOCKET" send-keys -t "$CLAUDE_PANE" -l "$encoded"
+  "$REAL_TMUX" -L "$SOCKET" send-keys -t "$CLAUDE_PANE" -l " and the captain added this"
+  wait_claude_state pending || fail "Scenario F: the combined draft did not read pending"
+  claude_call fm_backend_composer_clear_payload tmux "$CLAUDE_PANE" "$encoded" \
+    && fail "Scenario F: the clear deleted a composer holding the captain's text"
+  claude_screen | grep -q 'the captain added this' || fail "Scenario F: the captain's text was deleted: $(claude_screen)"
+  pass "Scenario F: text the captain typed is never typed over and never cleared"
+}
+
 test_scenario_a
 test_scenario_b
 test_scenario_c
+test_scenario_d
+test_scenario_e
+test_scenario_f
 
 echo "all e2e injection tests passed"

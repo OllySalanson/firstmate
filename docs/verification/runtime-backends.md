@@ -717,6 +717,31 @@ Cursor is deliberately outside this cursor-anchored empty-composer matrix becaus
 
 `zellij action dump-screen --pane-id <id> --ansi` was verified at zellij 0.44.0 to preserve ANSI styling (real Claude Code rendered inside a zellij pane dumped `ESC[m` `❯` U+00A0 for its idle composer row), which is the capability the zellij composer classifier reads.
 
+### 2026-09-25 claude 2.1.282 wrapped away digest on tmux
+
+Verified on 2026-09-25 on WSL2 Linux (kernel 6.18.33.2-microsoft-standard-WSL2) with tmux 3.4 and Claude Code 2.1.282, on an isolated private socket, with no prompt submitted.
+Claude soft-wraps a long single-line draft inside its `─` rule pair onto indented rows, so a wrapped PR list or the away digest's ` | ` separator can start a row.
+Those rows read as a dead-shell prompt and a structural edge anywhere outside a composer; the classifier now bounds a glyph-proven rule pair's draft by its closing rule instead (`_fm_composer_rule_pair_input` in `bin/fm-composer-lib.sh`).
+The guard's wrapped-draft check types a digest of 70 `#NNN |` tokens, requires `pending` from both the cursor-anchored and the cursorless read, requires the extracted draft to match what was typed, and requires the payload-proven clear to return the composer to `empty`:
+
+```sh
+FM_COMPOSER_MATRIX_LIVE=1 tests/fm-composer-matrix-live-e2e.test.sh
+```
+
+Observed output (absent-harness notes elided):
+
+```text
+ok - claude (2.1.282 (Claude Code)): real idle composer classifies empty
+ok - claude (2.1.282 (Claude Code)): the same idle pane read cursorless is not pending (verdict: empty)
+ok - claude (2.1.282 (Claude Code)): a wrapped draft with # and | rows reads pending both ways and clears to empty
+ok - strict posture live: a blank shell row classifies unknown and injection defers
+ok - live composer-matrix guard verified 4 live surface(s)
+```
+
+Two further Claude Code 2.1.282 facts shape the away-digest path and were measured on the same machine by driving a real Claude pane directly.
+The first Enter on a draft that carries U+2063 only strips the mark and shows `Removed 1 invisible character · review and press Enter to send`, so a marked digest always needs a second Enter; `tests/fm-afk-inject-e2e.test.sh` Scenarios D to F reproduce that behavior portably.
+One input burst of 799 characters was recorded as typed text while 820 characters arrived wrapped in `pasted_content`, which is why `escalate_digest` in `bin/fm-supervise-daemon.sh` bounds each typed digest to `FM_INJECT_MAX_BYTES`.
+
 ### 2026-09-20 claude 2.1.236 statusLine footer through Herdr
 
 Verified on 2026-09-20 on macOS arm64 (Darwin 25.6.0) against Claude Code 2.1.236 running as Firstmate workers in Herdr 0.8.0 panes, read through Herdr's ANSI capture with its exact capability descriptor (`styled=1`, `cursor=0`, `identity=1`, `rows=20`).

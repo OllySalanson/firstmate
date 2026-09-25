@@ -330,6 +330,35 @@ fm_tmux_composer_state() {  # <target> -> empty|pending|pending-unproven|unknown
   printf '%s' "$verdict"
 }
 
+# fm_tmux_composer_content: the selected composer's visible typed text, read
+# from the styled capture through the shared extractor, so ghost text never
+# counts as typed content.
+fm_tmux_composer_content() {  # <target>
+  local pane
+  pane=$(fm_tmux_composer_capture "$1") || return 1
+  fm_composer_extract_selected_content "$(fm_tmux_composer_caps)" "$pane"
+}
+
+# fm_tmux_press_key: press one named key on the exact pane <target> names.
+fm_tmux_press_key() {  # <target> <key>
+  local pane
+  pane=$(fm_tmux_exact_pane "$1") || return 1
+  tmux send-keys -t "$pane" "$2" 2>/dev/null
+}
+
+# fm_tmux_composer_clear_payload: clear <text> left behind by a failed submit,
+# only when the composer shows exactly that payload (fm_composer_payload_shown);
+# anything else, including a draft the captain typed, is left untouched and
+# returns 1. The deletion itself is the shared fm_composer_clear_core. 0 only
+# when the composer is verified empty again.
+fm_tmux_composer_clear_payload() {  # <target> <text>
+  local target=$1 text=$2 content
+  content=$(fm_tmux_composer_content "$target") || return 1
+  fm_composer_payload_shown "$text" "$content" || return 1
+  fm_composer_clear_core fm_tmux_press_key fm_tmux_composer_state \
+    "$target" "$(fm_composer_payload_rows "$text")"
+}
+
 # fm_tmux_pane_is_cursor: true when the pane's FOREGROUND process group contains
 # a genuine Cursor Agent CLI process. Cursor runs as a bundled node script, so
 # tmux's own #{pane_current_command} reports a bare `node`; identity therefore

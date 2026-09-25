@@ -3152,7 +3152,7 @@ fm_backend_herdr_rendered_busy_state() {  # <target> [harness] -> busy|idle|unkn
 # (Enter only, never retyped) until native agent-state, a cleared composer, or
 # fm_composer_queued_enter_verdict confirms delivery. When native identity is
 # Claude, text is typed only into an empty composer and Enter is sent only
-# after the composer shows the payload (fm_backend_herdr_composer_payload_shown).
+# after the composer shows the payload (fm_composer_payload_shown).
 # A missing read, a shorter suffix, or a paste placeholder followed by a
 # literal remainder does not press Enter: the composer is cleared back to
 # empty and the verdict is send-failed, or unknown when the clear cannot be
@@ -3252,15 +3252,13 @@ fm_backend_herdr_queued_enter_busy() {  # <target> <allow-rendered>
 # fm_backend_herdr_proof_lines: how many tail rows the pre-Enter payload proof
 # captures. A literal payload wraps, and a tail-only capture of a complete
 # wrap would look like the truncation this proof exists to refuse. The bound
-# stays inside the selected composer extraction; it is not a whole-pane search.
+# (fm_composer_payload_rows, floored at the ordinary composer capture) stays
+# inside the selected composer extraction; it is not a whole-pane search.
 fm_backend_herdr_proof_lines() {  # <text>
-  local text=$1 lines
-  lines=$(( (${#text} / 40) + 8 ))
+  local lines
+  lines=$(fm_composer_payload_rows "$1")
   if [ "$lines" -lt "$FM_COMPOSER_CAPTURE_LINES" ]; then
     lines=$FM_COMPOSER_CAPTURE_LINES
-  fi
-  if [ "$lines" -gt 200 ]; then
-    lines=200
   fi
   printf '%s' "$lines"
 }
@@ -3280,51 +3278,24 @@ fm_backend_herdr_composer_content() {  # <target> [lines]
   fm_composer_extract_selected_content "$caps" "$cap"
 }
 
-# fm_backend_herdr_composer_payload_shown: 0 when <after>, read from a
-# composer that was empty before the send, shows <text>.
-# Literal equality ignores whitespace, the same comparison zellij uses, so a
-# wrapped payload still matches. It also ignores U+2063, the invisible mark
-# that starts operational inputs and separates the from-firstmate label:
-# Claude's composer read-back on Herdr never shows it (verified live), and it
-# carries no instruction text of its own. A composer that holds only
-# `[Pasted text #N]` or `[Pasted text #N +M lines]` placeholders (the
-# multi-line form, verified live on Claude 2.1.278), with no literal remainder,
-# is the same proof for one fast burst: Claude collapses that burst into the
-# placeholder and expands it on submit. A shorter literal suffix, or a placeholder followed by a literal
-# remainder, is the head-truncation shape and is not proof.
-fm_backend_herdr_composer_payload_shown() {  # <text> <after>
-  local text=$1 after=$2 literal
-  fm_composer_normalize_spaces_var text
-  fm_composer_normalize_spaces_var after
-  text=${text//[$' \t\r\n\v\f']/}
-  text=${text//$'\xE2\x81\xA3'/}
-  after=${after//[$' \t\r\n\v\f']/}
-  after=${after//$'\xE2\x81\xA3'/}
-  [ -n "$text" ] && [ -n "$after" ] || return 1
-  [ "$after" = "$text" ] && return 0
-  literal=$after
-  while [[ $literal =~ \[Pastedtext#[0-9]+(\+[0-9]+lines?)?\] ]]; do
-    literal=${literal/"${BASH_REMATCH[0]}"/}
-  done
-  [ -z "$literal" ]
+# fm_backend_herdr_composer_clear: after a refused proof, delete back to an
+# empty composer through the shared fm_composer_clear_core, bounded by the rows
+# the proof capture covers. 0 only when the composer is verified empty again.
+fm_backend_herdr_composer_clear() {  # <target> <text>
+  fm_composer_clear_core fm_backend_herdr_send_key fm_backend_herdr_composer_state \
+    "$1" "$(fm_backend_herdr_proof_lines "$2")"
 }
 
-# fm_backend_herdr_composer_clear: after a refused proof, press Ctrl+U until
-# the shared classifier reads the composer as empty. Claude documents Ctrl+U
-# as delete-to-line-start, repeated across lines of a multiline draft; Ctrl+C
-# is not used because it interrupts a running turn. Live Claude deletes one
-# wrapped screen row per press, so a single-line leftover can need several
-# presses. The press count is bounded by the rows the proof capture covers.
-# 0 only when the composer is verified empty again.
-fm_backend_herdr_composer_clear() {  # <target> <text>
-  local target=$1 text=$2 presses i=0
-  presses=$(fm_backend_herdr_proof_lines "$text")
-  while [ "$i" -lt "$presses" ]; do
-    fm_backend_herdr_send_key "$target" C-u || return 1
-    i=$((i + 1))
-    [ "$(fm_backend_herdr_composer_state "$target")" = empty ] && return 0
-  done
-  return 1
+# fm_backend_herdr_composer_clear_payload: clear <text> left behind by a failed
+# submit, only when the composer shows exactly that payload
+# (fm_composer_payload_shown); anything else, including a draft the captain
+# typed, is left untouched and returns 1.
+fm_backend_herdr_composer_clear_payload() {  # <target> <text>
+  local target=$1 text=$2 content
+  content=$(fm_backend_herdr_composer_content "$target" "$(fm_backend_herdr_proof_lines "$text")") \
+    || return 1
+  fm_composer_payload_shown "$text" "$content" || return 1
+  fm_backend_herdr_composer_clear "$target" "$text"
 }
 
 fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle>
@@ -3347,7 +3318,7 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
   sleep "$settle"
   if [ "$proof" = 1 ]; then
     if ! content=$(fm_backend_herdr_composer_content "$target" "$proof_lines") \
-      || ! fm_backend_herdr_composer_payload_shown "$text" "$content"; then
+      || ! fm_composer_payload_shown "$text" "$content"; then
       if fm_backend_herdr_composer_clear "$target" "$text"; then
         printf 'send-failed'
       else

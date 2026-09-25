@@ -752,6 +752,33 @@ _fm_composer_pi_separator_row() {  # <trimmed-row>
   return 1
 }
 
+# _fm_composer_rule_pair_input: 0 when <row> lies in the input region of a
+# composer drawn as a rule pair around an agent-glyph row, the shape real
+# claude 2.x draws (`─` rule, `❯` plus the draft, `─` rule). The pair's closing
+# rule, not a row's own first or last character, bounds that draft: a long
+# single-line draft wraps onto rows that can lead with `#` (`#412` when a list
+# of PR numbers wraps) or start or end with the ` | ` digest separator, which
+# read as a dead-shell prompt or a structural edge anywhere else and used to
+# turn a whole, visible draft into `unknown` (live on claude 2.1.282 in tmux,
+# 2026-09-25: the away digest's Enter was never retried and its text stayed in
+# the captain's composer). Only the scan's final closed pair counts, and only
+# when its agent-glyph row sits directly under its opening rule; every row
+# outside that region keeps its ordinary shell and edge meaning. Sets
+# FM_COMPOSER_PAIR_INPUT_FIRST and FM_COMPOSER_PAIR_INPUT_LAST to the glyph row
+# and the row above the closing rule. Reads the FM_COMPOSER_SCAN_* results.
+_fm_composer_rule_pair_input() {  # <row>
+  local row=$1
+  FM_COMPOSER_PAIR_INPUT_FIRST=-1
+  FM_COMPOSER_PAIR_INPUT_LAST=-1
+  [ "$FM_COMPOSER_SCAN_PI_PAIR_FOUND" = 1 ] || return 1
+  [ "$FM_COMPOSER_SCAN_PI_GLYPH_ROW" -ge 0 ] || return 1
+  [ "$FM_COMPOSER_SCAN_PI_GLYPH_ROW" -eq "$((FM_COMPOSER_SCAN_PI_OPEN + 1))" ] || return 1
+  [ "$row" -ge "$FM_COMPOSER_SCAN_PI_GLYPH_ROW" ] || return 1
+  [ "$row" -lt "$FM_COMPOSER_SCAN_PI_CLOSE" ] || return 1
+  FM_COMPOSER_PAIR_INPUT_FIRST=$FM_COMPOSER_SCAN_PI_GLYPH_ROW
+  FM_COMPOSER_PAIR_INPUT_LAST=$((FM_COMPOSER_SCAN_PI_CLOSE - 1))
+}
+
 # Row-scan results are returned through FM_COMPOSER_SCAN_* globals (bash 3.2
 # has no nameref); they are internal to this owner.
 _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
@@ -1114,15 +1141,20 @@ _fm_composer_screen_row() {  # <n> <screen>
 
 # _fm_composer_row_content: extract the classification content of one raw row:
 # ghost-strip when styled, plain otherwise, normalize-trim, and strip one
-# matching pair of side border glyphs.
-_fm_composer_row_content() {  # <raw-row> <styled> -> content on stdout
-  local raw=$1 styled=$2 stripped
+# matching pair of side border glyphs unless <keep-edges> is 1 (a borderless
+# composer has no side borders, so a typed row like `| x |` is all input).
+_fm_composer_row_content() {  # <raw-row> <styled> [keep-edges] -> content on stdout
+  local raw=$1 styled=$2 keep_edges=${3:-0} stripped
   if [ "$styled" = 1 ]; then
     stripped=$(printf '%s\n' "$raw" | fm_composer_strip_ghost)
   else
     stripped=$(printf '%s\n' "$raw" | fm_composer_strip_ansi)
   fi
   fm_composer_normalize_trim_var stripped
+  if [ "$keep_edges" = 1 ]; then
+    printf '%s' "$stripped"
+    return 0
+  fi
   case "$stripped" in
     '│'*'│') stripped=${stripped#│}; stripped=${stripped%│} ;;
     '┃'*'┃') stripped=${stripped#┃}; stripped=${stripped%┃} ;;
@@ -1242,11 +1274,12 @@ _fm_composer_wrap_region_ok() {  # <plain-screen> <glyph-row> <cursor-row>
 
 # _fm_composer_classify_bare_wrap: the bare composer plus its wrap region.
 # Content is the glyph row (glyph stripped) plus every continuation row down
-# to the cursor. Ghost-stripped-to-nothing rows are an empty composer whose
+# to <last-row>: the cursor row, or the row above a rule pair's closing rule.
+# Ghost-stripped-to-nothing rows are an empty composer whose
 # suggestion happened to wrap; any surviving text is pending when styling can
 # prove it real and unknown otherwise (the same styled=0 degradation as the
 # glyph row itself).
-_fm_composer_classify_bare_wrap() {  # <screen> <styled> <glyph-row> <cursor-row>
+_fm_composer_classify_bare_wrap() {  # <screen> <styled> <glyph-row> <last-row>
   local screen=$1 styled=$2 g=$3 cy=$4 row raw content glyph='' text_seen=0
   row=$g
   while [ "$row" -le "$cy" ]; do
@@ -1443,6 +1476,14 @@ _fm_composer_select_cursorless() {
     FM_COMPOSER_SELECTED_KIND=bare
     FM_COMPOSER_SELECTED_FIRST=$bare
     FM_COMPOSER_SELECTED_LAST=$bare
+    # A bare candidate inside a rule pair's glyph-proven input region selects
+    # that whole region, and only rows below its closing rule can prove it
+    # stale.
+    if _fm_composer_rule_pair_input "$bare"; then
+      generic=$FM_COMPOSER_SCAN_PI_CLOSE
+      FM_COMPOSER_SELECTED_FIRST=$FM_COMPOSER_PAIR_INPUT_FIRST
+      FM_COMPOSER_SELECTED_LAST=$FM_COMPOSER_PAIR_INPUT_LAST
+    fi
   fi
   if [ "$FM_COMPOSER_SCAN_LEFTBAR_END" -gt "$generic" ]; then
     generic=$FM_COMPOSER_SCAN_LEFTBAR_END
@@ -1532,7 +1573,11 @@ EOF
   row=$FM_COMPOSER_SELECTED_FIRST
   while [ "$row" -le "$FM_COMPOSER_SELECTED_LAST" ]; do
     raw=$(_fm_composer_screen_row "$row" "$screen")
-    content=$(_fm_composer_row_content "$raw" "$styled")
+    if [ "$FM_COMPOSER_SELECTED_KIND" = bare ]; then
+      content=$(_fm_composer_row_content "$raw" "$styled" 1)
+    else
+      content=$(_fm_composer_row_content "$raw" "$styled")
+    fi
     placeholder_position=0
     case "$FM_COMPOSER_SELECTED_KIND" in
       bare)
@@ -1626,6 +1671,15 @@ EOF
        && [ "$cy" -le "$FM_COMPOSER_SCAN_LEFTBAR_END" ]; then
       _fm_composer_classify_leftbar "$screen" "$styled" \
         "$FM_COMPOSER_SCAN_LEFTBAR_START" "$FM_COMPOSER_SCAN_LEFTBAR_END"
+      return 0
+    fi
+    # A cursor on a wrapped row of a rule pair's glyph-proven input region
+    # reads that whole region, down to the closing rule, whatever its rows lead
+    # or end with. A cursor on the glyph row itself keeps the identity-aware
+    # overlap path below, which is what tells a Pi draft from a Claude one.
+    if [ "$cy" -gt "$FM_COMPOSER_SCAN_PI_GLYPH_ROW" ] && _fm_composer_rule_pair_input "$cy"; then
+      _fm_composer_classify_bare_wrap "$screen" "$styled" \
+        "$FM_COMPOSER_PAIR_INPUT_FIRST" "$FM_COMPOSER_PAIR_INPUT_LAST"
       return 0
     fi
     if [ "$FM_COMPOSER_SCAN_BARE_ROW" -ge 0 ] && [ "$cy" -eq "$FM_COMPOSER_SCAN_BARE_ROW" ]; then
@@ -1745,6 +1799,65 @@ fm_composer_queued_enter_verdict() {  # <composer-state> <busy|idle|unknown>
   else
     printf 'pending'
   fi
+}
+
+# fm_composer_payload_shown: 0 when <after>, the extracted content of a
+# composer that was empty before <text> was typed into it, shows <text>.
+# Literal equality ignores whitespace, so a wrapped payload still matches. It
+# also ignores U+2063, the invisible mark that starts operational inputs and
+# separates the from-firstmate label: Claude's composer read-back on Herdr never
+# shows it (verified live), Claude 2.1.28x strips it on the first Enter, and it
+# carries no instruction text of its own. A composer that holds only
+# `[Pasted text #N]` or `[Pasted text #N +M lines]` placeholders (the
+# multi-line form, verified live on Claude 2.1.278), with no literal remainder,
+# is the same proof for one fast burst: Claude collapses that burst into the
+# placeholder and expands it on submit. A shorter literal suffix, a placeholder
+# followed by a literal remainder, or any text beyond <text> is not proof.
+fm_composer_payload_shown() {  # <text> <after>
+  local text=$1 after=$2 literal
+  fm_composer_normalize_spaces_var text
+  fm_composer_normalize_spaces_var after
+  text=${text//[$' \t\r\n\v\f']/}
+  text=${text//$'\xE2\x81\xA3'/}
+  after=${after//[$' \t\r\n\v\f']/}
+  after=${after//$'\xE2\x81\xA3'/}
+  [ -n "$text" ] && [ -n "$after" ] || return 1
+  [ "$after" = "$text" ] && return 0
+  literal=$after
+  while [[ $literal =~ \[Pastedtext#[0-9]+(\+[0-9]+lines?)?\] ]]; do
+    literal=${literal/"${BASH_REMATCH[0]}"/}
+  done
+  [ -z "$literal" ]
+}
+
+# fm_composer_payload_rows: a generous bound on the screen rows <text> can
+# occupy once typed, used both to size a composer capture that must see a whole
+# wrapped payload and to bound the deletions fm_composer_clear_core may press.
+fm_composer_payload_rows() {  # <text>
+  local text=$1 rows
+  rows=$(( (${#text} / 40) + 8 ))
+  [ "$rows" -le 200 ] || rows=200
+  printf '%s' "$rows"
+}
+
+# fm_composer_clear_core: the ONE delete-to-empty loop for clearing text a
+# failed submit left in a composer. Presses Ctrl+U, then re-reads the verdict,
+# until the composer reads exactly `empty` or <presses> are spent. Claude
+# documents Ctrl+U as delete-to-line-start, repeated across the lines of a
+# multi-line draft, and live Claude deletes one wrapped screen row per press
+# (Herdr and tmux both), so a single long line needs several presses. Ctrl+C
+# is never used because it interrupts a running turn. This loop knows nothing
+# about whose text it deletes: callers first prove the composer shows only
+# their own payload (fm_composer_payload_shown), so a draft the captain typed
+# is never touched. 0 only when the composer is verified empty again.
+fm_composer_clear_core() {  # <send-key-fn> <state-fn> <target> <presses>
+  local send_key_fn=$1 state_fn=$2 target=$3 presses=$4 i=0
+  while [ "$i" -lt "$presses" ]; do
+    "$send_key_fn" "$target" C-u || return 1
+    i=$((i + 1))
+    [ "$("$state_fn" "$target")" = empty ] && return 0
+  done
+  return 1
 }
 
 _fm_composer_classify_pi_rows() {  # <screen> <styled>

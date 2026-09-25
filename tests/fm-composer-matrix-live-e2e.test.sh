@@ -70,6 +70,8 @@ chmod +x "$SHIM_DIR/tmux"
 PATH="$SHIM_DIR:$PATH"
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-tmux-lib.sh"
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-operational-input.sh"
 
 tmux -L "$SOCKET" new-session -d -s "$SESSION" -x 220 -y 50 -c "$ROOT"
 
@@ -167,6 +169,82 @@ for h in claude codex opencode pi grok kimi muse; do
     note "harness absent, not verified here: $h"
   fi
 done
+
+# --- 1b. Claude: a long wrapped away digest stays readable, and clears ------
+# The away daemon types a long single-line digest into Claude's composer.
+# Claude soft-wraps it inside its `─` rule pair onto rows that can start with
+# `#` (a wrapped PR list) or with the digest's ` | ` separator, the row shapes
+# that read as a dead-shell prompt and a structural edge anywhere else. Both
+# reads must see the whole draft as pending, the extracted draft must match
+# what was typed, and the payload-proven clear must return the composer to
+# empty. The draft is typed and deleted, never submitted, so no tokens are
+# spent (Enter is never pressed: Claude 2.1.28x's first Enter only strips
+# U+2063, but a release that stopped doing so would submit).
+check_claude_wrapped_draft() {
+  local version win=hx-claude-wrap verdict='' i=0 text encoded screen pane caps content n
+  version=$(harness_version claude)
+  tmux -L "$SOCKET" new-window -d -t "$SESSION:" -n "$win" -c "$ROOT" -- claude \
+    || fail "claude ($version): could not launch for the wrapped-draft check"
+  while [ "$i" -lt "${FM_COMPOSER_MATRIX_LIVE_POLLS:-45}" ]; do
+    verdict=$(fm_tmux_composer_state "$SESSION:$win")
+    [ "$verdict" = empty ] && break
+    i=$((i + 1))
+    sleep 1
+  done
+  if [ "$verdict" != empty ]; then
+    FAILED=1
+    printf 'not ok - claude (%s): wrapped-draft check never saw an idle composer (last verdict: %s)\n' \
+      "$version" "${verdict:-unreadable}" >&2
+    tmux -L "$SOCKET" kill-window -t "$SESSION:$win" 2>/dev/null || true
+    return 0
+  fi
+  text='Supervisor escalate (1 event(s)): done: merged PRs'
+  for n in $(seq 400 469); do text="$text #$n |"; done
+  fm_operational_input_encode away-supervisor "$text" encoded
+  tmux -L "$SOCKET" send-keys -t "$SESSION:$win" -l "$encoded"
+  i=0
+  while [ "$i" -lt 20 ]; do
+    verdict=$(fm_tmux_composer_state "$SESSION:$win")
+    [ "$verdict" = pending ] && break
+    i=$((i + 1))
+    sleep 0.5
+  done
+  screen=$(tmux -L "$SOCKET" capture-pane -p -t "$SESSION:$win")
+  if ! printf '%s\n' "$screen" | grep -qE '^ *[#|]'; then
+    FAILED=1
+    printf 'not ok - claude (%s): no wrapped row started with # or |; the check exercised nothing\n' "$version" >&2
+  elif [ "$verdict" != pending ]; then
+    FAILED=1
+    printf 'not ok - claude (%s): a wrapped draft with # and | rows read %s under the cursor, expected pending\n' \
+      "$version" "${verdict:-unreadable}" >&2
+  else
+    pane=$(fm_tmux_composer_capture "$SESSION:$win")
+    caps=$(printf 'styled=1\ncursor=0\nidentity=0\nrows=0')
+    verdict=$(fm_composer_classify_screen "$caps" "$pane")
+    content=$(fm_tmux_composer_content "$SESSION:$win")
+    if [ "$verdict" != pending ]; then
+      FAILED=1
+      printf 'not ok - claude (%s): the wrapped draft read %s cursorless, expected pending\n' "$version" "$verdict" >&2
+    elif ! fm_composer_payload_shown "$encoded" "$content"; then
+      FAILED=1
+      printf 'not ok - claude (%s): the extracted draft does not match what was typed: %s\n' "$version" "$content" >&2
+    elif ! fm_tmux_composer_clear_payload "$SESSION:$win" "$encoded"; then
+      FAILED=1
+      printf 'not ok - claude (%s): the payload-proven clear did not return the composer to empty (verdict: %s)\n' \
+        "$version" "$(fm_tmux_composer_state "$SESSION:$win")" >&2
+    else
+      CHECKED=$((CHECKED + 1))
+      pass "claude ($version): a wrapped draft with # and | rows reads pending both ways and clears to empty"
+    fi
+  fi
+  tmux -L "$SOCKET" kill-window -t "$SESSION:$win" 2>/dev/null || true
+}
+
+if command -v claude >/dev/null 2>&1; then
+  check_claude_wrapped_draft
+else
+  note "harness absent, not verified here: claude wrapped draft"
+fi
 
 # --- 2. The strict blank-row posture, live ----------------------------------
 # A plain shell pane parked on a blank line between two rules (the audit's
