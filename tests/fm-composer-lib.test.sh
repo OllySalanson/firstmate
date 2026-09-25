@@ -944,6 +944,76 @@ test_titled_bottom_requires_matching_width
 test_cursor_on_proven_box_bottom_classifies_content
 test_selected_content_is_composer_scoped_and_wrap_normalized
 
+test_matrix_claude_rule_pair_wraps_hash_and_bar_rows() {
+  # Real claude 2.1.282 in tmux (captured live 2026-09-25): a long single-line
+  # away digest wraps inside claude's `─` rule pair onto rows that start with
+  # `#412` (a wrapped PR list) and with the digest's ` | ` separator. Outside a
+  # composer those rows read as a dead-shell prompt and a structural edge, and
+  # they used to turn this whole visible draft into `unknown`: the submit core
+  # then never retried the Enter that claude needs after stripping U+2063, and
+  # the digest stayed in the captain's composer.
+  local rule screen out want
+  rule='────────────────────────────────'
+  screen="transcript"$'\n'"$rule"$'\n'"❯ FIRSTMATE_OP: done merged PRs"$'\n'"  #412 #413 #414 into release"$'\n'"  | signal: x.status: done |"$'\n'"$rule"$'\n'"  ⏸ manual mode on"
+  assert_screen "claude # row under the cursor on tmux" pending "$CAPS_TMUX" "$screen" 3 probe-absent
+  assert_screen "claude | row under the cursor on tmux" pending "$CAPS_TMUX" "$screen" 4 probe-absent
+  assert_screen "claude wrapped draft on herdr" pending "$CAPS_STYLED" "$screen" '' "$(printf 'claude\tidle')"
+  assert_screen "claude wrapped draft on zellij" pending "$CAPS_STYLED_NOID" "$screen"
+  want='FIRSTMATE_OP: done merged PRs #412 #413 #414 into release | signal: x.status: done |'
+  out=$(fm_composer_extract_selected_content "$CAPS_STYLED_NOID" "$screen")
+  [ "$out" = "$want" ] || fail "the whole wrapped claude draft should be extracted, got '$out'"
+  out=$(fm_composer_extract_selected_content "$CAPS_TMUX" "$screen")
+  [ "$out" = "$want" ] || fail "the tmux capture should extract the whole wrapped draft, got '$out'"
+
+  # The closing rule is the only boundary: the same rows keep their shell and
+  # edge meaning anywhere outside a glyph-proven pair.
+  screen="$rule"$'\n'"❯"$'\n'"$rule"$'\n'"process exited"$'\n'"# "
+  assert_screen "dead shell below a claude pair on tmux" unknown "$CAPS_TMUX" "$screen" 4 probe-absent
+  assert_screen "dead shell below a claude pair on herdr" unknown "$CAPS_STYLED" "$screen" '' probe-absent
+  assert_screen "dead shell below a claude pair on zellij" unknown "$CAPS_STYLED_NOID" "$screen"
+  screen="$rule"$'\n'"tool output"$'\n'"❯ quoted prompt"$'\n'"# root prompt"$'\n'"$rule"
+  assert_screen "a pair whose glyph row is not under its opening rule on tmux" unknown "$CAPS_TMUX" "$screen" 3 probe-absent
+  assert_screen "a pair whose glyph row is not under its opening rule on zellij" unknown "$CAPS_STYLED_NOID" "$screen"
+  pass "matrix: claude's rule pair bounds its wrapped draft, whatever its rows lead or end with"
+}
+
+test_payload_shown_matches_only_the_whole_payload() {
+  local mark text
+  mark=$'\xE2\x81\xA3'
+  text="${mark}FIRSTMATE_OP: v1 away-supervisor: done #412 | x"
+  fm_composer_payload_shown "$text" "FIRSTMATE_OP: v1 away-supervisor: done #412 | x" \
+    || fail "a composer showing the payload without its stripped U+2063 should match"
+  fm_composer_payload_shown "$text" "FIRSTMATE_OP: v1 away-super visor: done #412 | x" \
+    || fail "a wrapped payload (whitespace moved) should match"
+  fm_composer_payload_shown "$text" "[Pasted text #1 +3 lines]" \
+    || fail "a placeholder-only composer is one fast burst of the payload"
+  fm_composer_payload_shown "$text" "FIRSTMATE_OP: v1 away-supervisor: done #412 | x and captain words" \
+    && fail "text beyond the payload must not match"
+  fm_composer_payload_shown "$text" "done #412 | x" \
+    && fail "a truncated suffix must not match"
+  fm_composer_payload_shown "$text" "[Pasted text #1] done #412 | x" \
+    && fail "a placeholder followed by literal text must not match"
+  fm_composer_payload_shown "$text" "" && fail "an empty composer must not match"
+  pass "fm_composer_payload_shown: only the whole payload, with or without U+2063, matches"
+}
+
+test_clear_core_presses_until_empty() {
+  local dir out
+  dir=$(fm_test_tmproot fm-composer-clear-core)
+  printf '3\n' > "$dir/rows"
+  : > "$dir/keys"
+  fake_key() { printf '%s %s\n' "$1" "$2" >> "$dir/keys"; printf '%s\n' "$(( $(cat "$dir/rows") - 1 ))" > "$dir/rows"; }
+  fake_state() { if [ "$(cat "$dir/rows")" -le 0 ]; then printf 'empty'; else printf 'pending'; fi; }
+  fm_composer_clear_core fake_key fake_state pane 10 || fail "the clear core should stop once the composer reads empty"
+  [ "$(wc -l < "$dir/keys" | tr -d ' ')" -eq 3 ] || fail "expected three Ctrl+U presses, got: $(cat "$dir/keys")"
+  grep -qv '^pane C-u$' "$dir/keys" && fail "the clear core pressed something other than Ctrl+U: $(cat "$dir/keys")"
+  printf '9\n' > "$dir/rows"
+  fm_composer_clear_core fake_key fake_state pane 4 && fail "a clear that never reaches empty must fail"
+  out=$(cat "$dir/rows")
+  [ "$out" -eq 5 ] || fail "the clear core overran its press budget (rows left: $out)"
+  pass "fm_composer_clear_core: Ctrl+U until empty, bounded by its press budget"
+}
+
 test_queued_enter_verdict_busy_pending_is_empty() {
   local out
   out=$(fm_composer_queued_enter_verdict pending busy)
@@ -974,3 +1044,6 @@ test_queued_enter_verdict_does_not_convert_other_states() {
 test_queued_enter_verdict_busy_pending_is_empty
 test_queued_enter_verdict_idle_pending_stays_pending
 test_queued_enter_verdict_does_not_convert_other_states
+test_matrix_claude_rule_pair_wraps_hash_and_bar_rows
+test_payload_shown_matches_only_the_whole_payload
+test_clear_core_presses_until_empty

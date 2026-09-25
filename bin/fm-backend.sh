@@ -885,6 +885,23 @@ fm_backend_composer_state() {  # <backend> <target> [expected-label] -> empty|pe
   esac
 }
 
+# fm_backend_composer_clear_payload: after a submit that could not be
+# confirmed, delete <text> from <target>'s composer, but only when the composer
+# shows exactly that payload, so a draft someone else typed is never touched.
+# 0 only when the composer is verified empty again; 1 when it did not show the
+# payload, the clear could not be verified, or the backend has no verified
+# clear (only the supervisor backends tmux and herdr do).
+fm_backend_composer_clear_payload() {  # <backend> <target> <text>
+  local backend=$1
+  shift
+  fm_backend_source "$backend" || return 1
+  case "$backend" in
+    tmux) fm_tmux_composer_clear_payload "$@" ;;
+    herdr) fm_backend_herdr_composer_clear_payload "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
 # fm_backend_target_exists: cheap, READ-ONLY existence check - does the
 # recorded TARGET endpoint still exist on BACKEND? Never starts a server or
 # session: for herdr this deliberately queries the pane directly instead of

@@ -175,8 +175,9 @@ Classify each wake this way:
 - An unknown wake reason escalates fail-safe, while status-read uncertainty follows the shared one-report-without-position-advance contract referenced under Dedupe below.
 
 Escalations are buffered up to `FM_ESCALATE_BATCH_SECS` (default 90s; 0 =
-immediate) and flushed as one single-line digest prefixed with the current
+immediate) and flushed as single-line digests prefixed with the current
 operational prefix, carrying pre-read status summaries and a recommended action.
+Each digest is bounded by `FM_INJECT_MAX_BYTES` so Claude Code takes it as typed input rather than pasted content; items beyond the bound follow in the next digest.
 The single-line format makes the submission unambiguous across harnesses, and
 the operational prefix lets firstmate distinguish it from a real captain message.
 
@@ -188,6 +189,7 @@ the operational prefix lets firstmate distinguish it from a real captain message
 - **Busy and composer guards on the supervisor pane** - before injecting, the daemon runs the detected-primary-harness rendered busy guard and reads `fm_backend_composer_state` directly.
   Only `empty` permits injection; `pending` protects half-typed or swallowed input, and `unknown` protects unreadable panes and bare dead-shell prompts.
   Every other result preserves the buffer for retry, so the daemon never merges its digest into the captain's half-typed line or types it into a shell.
+- **Clear on a failed submit** - when a digest's submit cannot be confirmed, `inject_msg` deletes that digest from the composer through `fm_backend_composer_clear_payload`, but only when the composer shows exactly that digest, so a failed attempt never leaves text waiting in the captain's composer and never touches a draft the captain typed.
 - The active backend passes its capture plus declarative styled, cursor, identity, and row capabilities to the shared screen classifier; all structural recognition and verdict logic remains in `bin/fm-composer-lib.sh`.
   Styled captures let that owner remove dim/faint and dark-TRUECOLOR ghost or placeholder text while shape detection uses the ANSI-stripped screen, so a dark border is not lost with ghost content.
   A ghost-only or idle bordered composer such as claude's `│ > ... │` therefore reads empty without allowing an unbordered shell prompt to do the same.

@@ -144,6 +144,10 @@
 #                                   not misread as pending input.
 #          FM_INJECT_CONFIRM_SLEEP  seconds between daemon submit checks
 #                                   (default 0.5)
+#          FM_INJECT_MAX_BYTES      byte bound on one typed digest, envelope
+#                                   included (default 760, floor 256); items
+#                                   beyond it follow in later digests
+#                                   (escalate_digest)
 #          FM_LOG_MAX_BYTES / FM_LOG_KEEP_LINES / FM_CRASH_*  log + crash guards
 #          FM_STATE_OVERRIDE        alternate state dir (testing)
 #          Logs each wake to state/.supervise-daemon.log (size-capped). Single
@@ -225,6 +229,9 @@ WEDGE_ALARM_NOTIFIER_PID=
 INJECT_FAIL_SLEEP_DEFAULT=30
 INJECT_CONFIRM_RETRIES_DEFAULT=3
 INJECT_CONFIRM_SLEEP_DEFAULT=0.5
+# Byte bound on one typed digest, envelope included (escalate_digest owns why).
+INJECT_MAX_BYTES_DEFAULT=760
+INJECT_MAX_BYTES_MIN=256
 CRASH_THRESHOLD_DEFAULT=10
 CRASH_WINDOW_DEFAULT=60
 CRASH_BACKOFF_DEFAULT=60
@@ -700,21 +707,119 @@ escalate_add() {  # <state> <distilled-item>
   printf '%s\n' "$item" >> "$buf"
 }
 
-# Flush the escalation buffer as ONE batched, single-line digest to the
-# supervisor pane. Returns 0 on successful inject (or empty buffer), non-zero on
-# inject failure (buffer preserved for retry / catch-up).
+# _utf8_cut: print the longest prefix of <text> that is at most <max-bytes>
+# long and ends on a whole UTF-8 character.
+_utf8_cut() {  # <text> <max-bytes>
+  local LC_ALL=C s=$1 max=$2 i byte need
+  if [ "${#s}" -le "$max" ]; then printf '%s' "$s"; return 0; fi
+  s=${s:0:max}
+  i=$((${#s} - 1))
+  # Walk back over continuation bytes to the last character's lead byte, then
+  # drop that character when the cut left it incomplete.
+  while [ "$i" -ge 0 ]; do
+    printf -v byte '%d' "'${s:i:1}"
+    [ "$byte" -ge 128 ] && [ "$byte" -lt 192 ] || break
+    i=$((i - 1))
+  done
+  [ "$i" -ge 0 ] || { printf ''; return 0; }
+  need=1
+  if [ "$byte" -ge 240 ]; then need=4
+  elif [ "$byte" -ge 224 ]; then need=3
+  elif [ "$byte" -ge 192 ]; then need=2
+  fi
+  [ "$((${#s} - i))" -ge "$need" ] || s=${s:0:i}
+  printf '%s' "$s"
+}
+
+_byte_len() {  # <text>
+  local LC_ALL=C s=$1
+  printf '%s' "${#s}"
+}
+
+# escalate_digest: build the next digest from the buffered items, bounded so
+# the whole typed input, operational envelope included, stays within
+# FM_INJECT_MAX_BYTES. Claude Code records one input burst longer than 800
+# characters as pasted content (measured on 2.1.282 in tmux, 2026-09-25: 799
+# characters arrived as typed text, 820 wrapped in pasted_content), and macOS
+# hands Claude at most one 1022-byte terminal read at a time
+# (kunchenguid/firstmate#5661), so an unbounded digest arrives as untrusted
+# pasted content or truncated. The digest takes the leading items that fit and
+# names how many follow; a single item that cannot fit alone is cut at a UTF-8
+# boundary with the number of bytes cut, and its whole text stays in the
+# task's status log. Sets ESCALATE_DIGEST and ESCALATE_DIGEST_TAKEN.
+ESCALATE_DIGEST_SUFFIX=' (pre-read; re-arm not needed - watcher daemon-managed)'
+ESCALATE_DIGEST_MARKER=' ...[{n} bytes cut; full text in the task status log]'
+escalate_digest() {  # <item>... (at least one)
+  local n=$# max overhead budget k joined head candidate first cut room
+  local -a items=("$@")
+  max=${FM_INJECT_MAX_BYTES:-$INJECT_MAX_BYTES_DEFAULT}
+  case "$max" in ''|*[!0-9]*) max=$INJECT_MAX_BYTES_DEFAULT ;; esac
+  [ "$max" -ge "$INJECT_MAX_BYTES_MIN" ] || max=$INJECT_MAX_BYTES_MIN
+  fm_operational_input_encode away-supervisor x candidate || return 1
+  overhead=$(($(_byte_len "$candidate") - 1))
+  budget=$((max - overhead))
+  ESCALATE_DIGEST=
+  ESCALATE_DIGEST_TAKEN=0
+  joined=
+  k=0
+  while [ "$k" -lt "$n" ]; do
+    joined="${joined}${joined:+ | }${items[$k]}"
+    k=$((k + 1))
+    if [ "$k" -eq "$n" ]; then
+      head="Supervisor escalate ($n event(s)): "
+    else
+      head="Supervisor escalate ($k of $n event(s); $((n - k)) more follow): "
+    fi
+    candidate="${head}${joined}${ESCALATE_DIGEST_SUFFIX}"
+    if [ "$(_byte_len "$candidate")" -le "$budget" ]; then
+      ESCALATE_DIGEST=$candidate
+      ESCALATE_DIGEST_TAKEN=$k
+    fi
+  done
+  [ "$ESCALATE_DIGEST_TAKEN" -eq 0 ] || return 0
+  # Even the first item alone is too long: cut it to fit.
+  if [ "$n" -eq 1 ]; then
+    head="Supervisor escalate (1 event(s)): "
+  else
+    head="Supervisor escalate (1 of $n event(s); $((n - 1)) more follow): "
+  fi
+  # Room for the item: the budget less the frame and the cut marker, with the
+  # marker's byte count allowed up to ten digits.
+  room=$((budget - $(_byte_len "${head}${ESCALATE_DIGEST_MARKER}${ESCALATE_DIGEST_SUFFIX}") - 10))
+  [ "$room" -gt 0 ] || room=1
+  first=$(_utf8_cut "${items[0]}" "$room")
+  cut=$(( $(_byte_len "${items[0]}") - $(_byte_len "$first") ))
+  ESCALATE_DIGEST="${head}${first}${ESCALATE_DIGEST_MARKER/\{n\}/$cut}${ESCALATE_DIGEST_SUFFIX}"
+  ESCALATE_DIGEST_TAKEN=1
+}
+
+# Flush the escalation buffer as batched, single-line digests to the
+# supervisor pane, one bounded digest per call (escalate_digest). Returns 0
+# when the buffer is empty or its leading items were delivered, and non-zero on
+# inject failure (buffer preserved for retry / catch-up). Items beyond one
+# digest stay buffered, keep their first-append time, and go out on the next
+# flush once the pane is idle again.
 escalate_flush() {  # <state>
-  local state=$1 buf item n msg
+  local state=$1 buf line tmp
+  local -a items=()
   buf="$state/.subsuper-escalations"
   [ -s "$buf" ] || return 0
-  n=$(wc -l < "$buf" 2>/dev/null || echo 0)
-  # Join buffered items with the literal " | " separator into one digest line.
-  msg=$(awk 'NR>1{printf " | "} {printf "%s",$0} END{print ""}' "$buf" 2>/dev/null)
-  # Single-line wrapper: no embedded newlines (inject_msg also collapses as a
-  # safety net, but keeping the source single-line makes the intent explicit).
-  msg=$(printf 'Supervisor escalate (%s event(s)): %s (pre-read; re-arm not needed — watcher daemon-managed)' "$n" "$msg")
-  if inject_msg "$msg" "$state"; then : > "$buf"; rm -f "${buf}.since" "$state/.subsuper-inject-wedged"; return 0; fi
-  return 1
+  # An unreadable buffer (not a regular file) is kept, never cleared.
+  [ -f "$buf" ] && [ -r "$buf" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -n "$line" ] && items+=("$line")
+  done < "$buf"
+  if [ "${#items[@]}" -eq 0 ]; then : > "$buf"; rm -f "${buf}.since"; return 0; fi
+  escalate_digest "${items[@]}" || return 1
+  inject_msg "$ESCALATE_DIGEST" "$state" || return 1
+  rm -f "$state/.subsuper-inject-wedged"
+  if [ "$ESCALATE_DIGEST_TAKEN" -ge "${#items[@]}" ]; then
+    : > "$buf"; rm -f "${buf}.since"
+    return 0
+  fi
+  tmp="${buf}.tmp.$$"
+  printf '%s\n' "${items[@]:$ESCALATE_DIGEST_TAKEN}" > "$tmp" && mv -f "$tmp" "$buf"
+  return 0
 }
 
 # --- backend-independent active wedge alert ---------------------------------
@@ -1231,9 +1336,13 @@ window_for_task() {  # <task-key> [state]
 # the buffer so the escalation survives for the next cycle or the catch-up flush.
 #
 # Submit model:
-#   - TYPE ONCE, then submit with Enter. Never retype the digest: a swallowed
-#     Enter leaves our text in the composer, and retyping would concatenate two
-#     sentinel-prefixed digests into one corrupted turn.
+#   - TYPE ONCE, then submit with Enter. Never retype the digest within one
+#     attempt: a swallowed Enter leaves our text in the composer, and retyping
+#     would concatenate two sentinel-prefixed digests into one corrupted turn.
+#   - CLEAR ON FAILURE: an attempt that cannot confirm its submit deletes its
+#     own digest from the composer (fm_backend_composer_clear_payload) when the
+#     composer shows exactly that digest, so a later attempt starts from an
+#     empty composer and the captain never finds an unsent digest waiting.
 #   - SUBMIT ACK = the backend submit primitive reports `empty` after Enter.
 #     For tmux that means a cleared composer; for herdr's normal idle-baseline
 #     path it means native agent-state observed a real turn start.
@@ -1297,7 +1406,15 @@ inject_msg() {  # <message> [state]
   if [ "$verdict" = empty ]; then
     return 0  # Backend confirmed the submit.
   fi
-  log "inject failed: submit unconfirmed after $retries retries (verdict=$verdict, text may be in composer)"
+  # (5) A failed submit never leaves the digest in the captain's composer:
+  # delete it, but only when the composer shows exactly this digest, so text
+  # the captain typed is never touched. The buffer is kept either way and the
+  # digest is retyped whole on the next flush.
+  if fm_backend_composer_clear_payload "$backend" "$target" "$msg"; then
+    log "inject failed: submit unconfirmed after $retries retries (verdict=$verdict); cleared the unsent digest from the composer"
+  else
+    log "inject failed: submit unconfirmed after $retries retries (verdict=$verdict); composer not cleared because it does not show exactly this digest"
+  fi
   return 1
 }
 

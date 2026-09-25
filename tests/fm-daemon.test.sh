@@ -2140,6 +2140,97 @@ test_normal_flush_clears_stale_wedge_marker() {
   pass "normal flush clears a stale wedge marker"
 }
 
+# typed_bytes <digest>: bytes the daemon types for <digest>, envelope included.
+typed_bytes() {
+  local encoded
+  fm_operational_input_encode away-supervisor "$1" encoded
+  printf '%s' "$encoded" | wc -c | tr -d ' '
+}
+
+test_escalate_digest_keeps_small_batches_whole() {
+  escalate_digest "done: PR https://x/y/pull/1" "failed: build broke" \
+    || fail "escalate_digest failed on a small batch"
+  [ "$ESCALATE_DIGEST_TAKEN" -eq 2 ] || fail "a small batch was split (took $ESCALATE_DIGEST_TAKEN of 2)"
+  case "$ESCALATE_DIGEST" in
+    "Supervisor escalate (2 event(s)): done: PR https://x/y/pull/1 | failed: build broke (pre-read;"*) ;;
+    *) fail "unexpected small-batch digest: $ESCALATE_DIGEST" ;;
+  esac
+  pass "escalate_digest: a batch within the bound goes out whole in one digest"
+}
+
+test_escalate_digest_bounds_typed_bytes() {
+  local -a items=()
+  local i
+  for i in 1 2 3 4 5 6 7 8; do
+    items+=("done: PR https://github.com/o/r/pull/$i checks green; merged PRs #400 #401 #402 #403 #404 #405 #406 #407 #408 #409 #410 | item $i")
+  done
+  escalate_digest "${items[@]}" || fail "escalate_digest failed on a long batch"
+  [ "$ESCALATE_DIGEST_TAKEN" -ge 1 ] && [ "$ESCALATE_DIGEST_TAKEN" -lt 8 ] \
+    || fail "a long batch was not split (took $ESCALATE_DIGEST_TAKEN of 8)"
+  [ "$(typed_bytes "$ESCALATE_DIGEST")" -le 760 ] \
+    || fail "the digest types $(typed_bytes "$ESCALATE_DIGEST") bytes, over the default 760"
+  case "$ESCALATE_DIGEST" in
+    "Supervisor escalate ($ESCALATE_DIGEST_TAKEN of 8 event(s); $((8 - ESCALATE_DIGEST_TAKEN)) more follow): ${items[0]} | ${items[1]}"*) ;;
+    *) fail "the digest does not lead with the first items and name what follows: $ESCALATE_DIGEST" ;;
+  esac
+  FM_INJECT_MAX_BYTES=2000 escalate_digest "${items[@]}"
+  [ "$(typed_bytes "$ESCALATE_DIGEST")" -le 2000 ] && [ "$ESCALATE_DIGEST_TAKEN" -gt 4 ] \
+    || fail "FM_INJECT_MAX_BYTES did not widen the bound (took $ESCALATE_DIGEST_TAKEN)"
+  pass "escalate_digest: a long batch takes the leading items that fit FM_INJECT_MAX_BYTES"
+}
+
+test_escalate_digest_cuts_one_oversized_item_on_a_utf8_boundary() {
+  local item cut kept
+  item="failed: $(printf 'déploiement échoué → 🚀 %.0s' $(seq 1 60))end"
+  escalate_digest "$item" "done: next" || fail "escalate_digest failed on an oversized item"
+  [ "$ESCALATE_DIGEST_TAKEN" -eq 1 ] || fail "the oversized item was not taken alone (took $ESCALATE_DIGEST_TAKEN)"
+  [ "$(typed_bytes "$ESCALATE_DIGEST")" -le 760 ] \
+    || fail "the cut digest types $(typed_bytes "$ESCALATE_DIGEST") bytes, over the bound"
+  printf '%s' "$ESCALATE_DIGEST" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 \
+    || fail "the cut left a partial UTF-8 character"
+  case "$ESCALATE_DIGEST" in
+    "Supervisor escalate (1 of 2 event(s); 1 more follow): failed: déploiement"*" bytes cut; full text in the task status log] (pre-read;"*) ;;
+    *) fail "the cut digest lacks its frame or marker: $ESCALATE_DIGEST" ;;
+  esac
+  cut=${ESCALATE_DIGEST##*...\[}
+  cut=${cut%% bytes cut*}
+  kept=${ESCALATE_DIGEST#Supervisor escalate (1 of 2 event(s); 1 more follow): }
+  kept=${kept%% ...\[*}
+  [ "$(( $(printf '%s' "$kept" | wc -c) + cut ))" -eq "$(printf '%s' "$item" | wc -c)" ] \
+    || fail "the marker's byte count ($cut) does not account for the cut text"
+  pass "escalate_digest: one oversized item is cut on a UTF-8 boundary and says how much was cut"
+}
+
+test_escalate_flush_keeps_items_beyond_one_digest() {
+  local dir state fakebin sent i
+  dir=$(make_bordered_case flush-bounded)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  sent="$dir/sent.log"; : > "$sent"
+  for i in 1 2 3 4 5 6 7 8; do
+    escalate_add "$state" "done: PR https://github.com/o/r/pull/$i checks green; merged PRs #400 #401 #402 #403 #404 #405 #406 #407 #408 #409 #410 | item $i"
+  done
+  afk_enter "$state"
+  PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
+    FM_INJECT_CONFIRM_SLEEP=0.05 escalate_flush "$state" \
+    || fail "a bounded flush failed"
+  [ "$(grep -c 'Supervisor escalate' "$sent")" -eq 1 ] || fail "expected one digest typed, got: $(cat "$sent")"
+  grep -q 'item 1 ' "$sent" || fail "the first digest does not carry the first item"
+  [ -s "$state/.subsuper-escalations" ] || fail "items beyond the first digest were dropped"
+  grep -q 'item 1$' "$state/.subsuper-escalations" && fail "a delivered item stayed buffered"
+  grep -q 'item 8$' "$state/.subsuper-escalations" || fail "the last item was not kept for the next digest"
+  [ -e "$state/.subsuper-escalations.since" ] || fail "the kept items lost their first-append time"
+  while [ -s "$state/.subsuper-escalations" ]; do
+    PATH="$fakebin:$PATH" FM_FAKE_COMPOSER="$dir/composer" FM_FAKE_SENT="$sent" \
+      FM_INJECT_CONFIRM_SLEEP=0.05 escalate_flush "$state" || fail "a follow-up flush failed"
+  done
+  for i in 1 2 3 4 5 6 7 8; do
+    [ "$(grep -oF "| item $i " "$sent" | wc -l | tr -d ' ')" -eq 1 ] \
+      || fail "item $i was not delivered exactly once: $(cat "$sent")"
+  done
+  [ ! -e "$state/.subsuper-escalations.since" ] || fail "the first-append time survived an emptied buffer"
+  pass "escalate_flush: items beyond one digest stay buffered and follow in later digests"
+}
+
 test_below_max_defer_does_nothing() {
   local dir state fakebin sent capture
   dir=$(make_supercase below-maxdefer)
@@ -2870,6 +2961,10 @@ test_max_defer_empty_swallow_types_once_and_alarms
 test_max_defer_flushes_empty_idle_pane
 test_max_defer_pending_composer_alarms_without_typing
 test_normal_flush_clears_stale_wedge_marker
+test_escalate_digest_keeps_small_batches_whole
+test_escalate_digest_bounds_typed_bytes
+test_escalate_digest_cuts_one_oversized_item_on_a_utf8_boundary
+test_escalate_flush_keeps_items_beyond_one_digest
 test_below_max_defer_does_nothing
 test_max_defer_afk_inactive_does_not_flush_or_alarm
 test_wedge_alarm_library_mode_defaults_to_discard
