@@ -17,6 +17,9 @@
 #   6. fm-spawn --relaunch refuses on its own: a live agent, a contradicting
 #      flag, an extra positional, or a backend that cannot prove the previous
 #      agent exited.
+#   7. The backlog row is re-read, not re-dispatched: an In-flight item held
+#      for the captain relaunches and keeps its hold, while a fresh spawn of
+#      it and every other held row still refuse.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -2357,6 +2360,154 @@ test_relaunch_moves_a_drifted_item_back_in_flight() {
   pass "relaunch heals an item that drifted out of In flight while the task stayed live"
 }
 
+# hold_backlog <case-dir> <id> [kind]: hold the row the way a captain call does.
+hold_backlog() {
+  tasks-axi hold "$2" --reason "captain decision pending" ${3:+--kind "$3"} \
+    --file "$1/home/data/backlog.md" >/dev/null
+}
+
+backlog_field() {  # <case-dir> <id> <field>
+  tasks-axi show "$2" --file "$1/home/data/backlog.md" 2>/dev/null |
+    sed -n "s/^  $3: *//p" | head -1
+}
+
+test_relaunch_keeps_an_in_flight_task_held_for_the_captain_held() {
+  local dir out rc=0
+  command -v tasks-axi >/dev/null 2>&1 || {
+    pass "skipped: tasks-axi is not installed, so the backlog transition is inert"
+    return 0
+  }
+  dir=$(new_case held-relaunch rl42)
+  add_ship_task "$dir" rl42 claude
+  seed_backlog "$dir" rl42 in_flight
+  hold_backlog "$dir" rl42 captain
+
+  out=$(run_control "$dir" rl42 relaunch --note "picking the work back up") || rc=$?
+  expect_code 0 "$rc" "a relaunch of an In-flight task held for the captain must proceed"$'\n'"$out"
+  [ "$(backlog_state "$dir" rl42)" = in_flight ] \
+    || fail "a held relaunch moved its item to $(backlog_state "$dir" rl42)"
+  [ "$(backlog_field "$dir" rl42 held)" = yes ] && [ "$(backlog_field "$dir" rl42 hold_kind)" = captain ] \
+    || fail "a held relaunch dropped the captain's hold"
+  pass "relaunch replaces the worker of an In-flight task held for the captain and keeps the hold"
+}
+
+test_spawn_relaunch_keeps_an_in_flight_task_held_for_the_captain_held() {
+  local dir out rc=0
+  command -v tasks-axi >/dev/null 2>&1 || {
+    pass "skipped: tasks-axi is not installed, so the backlog transition is inert"
+    return 0
+  }
+  dir=$(new_case held-spawn-relaunch rl43)
+  add_ship_task "$dir" rl43 claude
+  seed_backlog "$dir" rl43 in_flight
+  hold_backlog "$dir" rl43 captain
+  printf 'zsh' > "$dir/fake/command"
+
+  out=$(run_spawn "$dir" rl43 --relaunch) || rc=$?
+  expect_code 0 "$rc" "a direct relaunch of an In-flight task held for the captain must proceed"$'\n'"$out"
+  [ "$(backlog_state "$dir" rl43)" = in_flight ] && [ "$(backlog_field "$dir" rl43 held)" = yes ] \
+    || fail "a direct held relaunch changed its item to $(backlog_state "$dir" rl43) held=$(backlog_field "$dir" rl43 held)"
+  pass "direct relaunch replaces the worker of an In-flight task held for the captain and keeps the hold"
+}
+
+# Interrupt a direct relaunch of <id> on its second backlog read - the commit's
+# re-read under the task lock - so the deferred-signal exit path must read the
+# held row back and report what it verified.
+interrupt_relaunch_during_commit() {  # <case-dir> <id>
+  local dir=$1 id=$2 real
+  real=$(command -v tasks-axi)
+  cat > "$dir/fakebin/tasks-axi" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = show ]; then
+  echo show >> "$dir/axi-shows"
+  if [ "\$(wc -l < "$dir/axi-shows")" -eq 2 ]; then
+    pkill -TERM -f "fm-spawn.sh $id --relaunch" || exit 1
+  fi
+fi
+exec "$real" "\$@"
+SH
+  chmod +x "$dir/fakebin/tasks-axi"
+}
+
+test_interrupted_held_relaunch_verifies_the_hold_it_kept() {
+  local dir out rc=0
+  command -v tasks-axi >/dev/null 2>&1 || {
+    pass "skipped: tasks-axi is not installed, so the backlog transition is inert"
+    return 0
+  }
+  dir=$(new_case held-interrupted rl47)
+  add_ship_task "$dir" rl47 claude
+  seed_backlog "$dir" rl47 in_flight
+  hold_backlog "$dir" rl47 captain
+  printf 'zsh' > "$dir/fake/command"
+  interrupt_relaunch_during_commit "$dir" rl47
+
+  out=$(run_spawn "$dir" rl47 --relaunch) || rc=$?
+  [ "$rc" -ne 0 ] || fail "an interrupted relaunch reported success"$'\n'"$out"
+  assert_contains "$out" "verified preserved: its paired task record is present and its backlog item is In flight" \
+    "an interrupted held relaunch did not verify the In-flight row it kept"
+  [ "$(backlog_state "$dir" rl47)" = in_flight ] && [ "$(backlog_field "$dir" rl47 held)" = yes ] \
+    || fail "an interrupted held relaunch changed its item to $(backlog_state "$dir" rl47) held=$(backlog_field "$dir" rl47 held)"
+  pass "an interrupted relaunch of a captain-held task verifies the held In-flight row it kept"
+}
+
+test_relaunch_still_refuses_rows_a_captain_hold_does_not_cover() {
+  local dir out rc
+  command -v tasks-axi >/dev/null 2>&1 || {
+    pass "skipped: tasks-axi is not installed, so the backlog transition is inert"
+    return 0
+  }
+  # A captain hold on a Queued row means no worker was ever owed, and a hold of
+  # another kind is not the captain's decision: both still refuse.
+  dir=$(new_case held-queued rl44)
+  add_ship_task "$dir" rl44 claude
+  seed_backlog "$dir" rl44 queued
+  hold_backlog "$dir" rl44 captain
+  rc=0
+  out=$(run_control "$dir" rl44 relaunch --note "picking the work back up") || rc=$?
+  [ "$rc" -ne 0 ] || fail "a relaunch onto a Queued item held for the captain was accepted"$'\n'"$out"
+  assert_contains "$out" "not dispatchable" "the refusal must name the backlog state"
+  [ "$(backlog_state "$dir" rl44)" = queued ] \
+    || fail "a refused relaunch moved its item to $(backlog_state "$dir" rl44)"
+
+  dir=$(new_case held-other rl45)
+  add_ship_task "$dir" rl45 claude
+  seed_backlog "$dir" rl45 in_flight
+  hold_backlog "$dir" rl45 external
+  rc=0
+  out=$(run_control "$dir" rl45 relaunch --note "picking the work back up") || rc=$?
+  [ "$rc" -ne 0 ] || fail "a relaunch onto an In-flight item under a non-captain hold was accepted"$'\n'"$out"
+  assert_contains "$out" "not dispatchable" "the refusal must name the backlog state"
+  pass "relaunch still refuses a held Queued item and a non-captain hold"
+}
+
+test_fresh_spawn_of_an_in_flight_task_held_for_the_captain_is_refused() {
+  local dir out rc=0
+  command -v tasks-axi >/dev/null 2>&1 || {
+    pass "skipped: tasks-axi is not installed, so the backlog transition is inert"
+    return 0
+  }
+  dir=$(new_case held-fresh rl46)
+  fm_git_worktree "$dir/proj" "$dir/wt-unused" task-rl46
+  mkdir -p "$dir/home/data/rl46"
+  cat > "$dir/home/data/rl46/brief.md" <<EOF
+# Task
+## Captain's intent
+Exercise a fresh spawn of a held task.
+
+## Firstmate spec
+Refuse it at the backlog preflight.
+EOF
+  seed_backlog "$dir" rl46 in_flight
+  hold_backlog "$dir" rl46 captain
+
+  out=$(run_spawn "$dir" rl46 "$dir/proj" --mode no-mistakes --yolo off) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a fresh spawn of an item held for the captain was accepted"$'\n'"$out"
+  assert_contains "$out" "not dispatchable in state in_flight yes no" "a fresh spawn must refuse at the backlog preflight"
+  [ ! -e "$dir/home/state/rl46.meta" ] || fail "a refused fresh spawn published a task record"
+  pass "a fresh spawn of an item held for the captain is still refused"
+}
+
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
 test_relaunch_deferred_by_the_memory_gate_changes_nothing
 test_gated_relaunch_reserves_its_worker_once
@@ -2429,3 +2580,8 @@ test_herdr_reclaim_of_a_secondmate_names_its_own_owner
 test_herdr_rebind_failure_from_a_plain_shell_names_the_real_cause
 test_relaunch_reverifies_an_already_in_flight_item_instead_of_rewriting_it
 test_relaunch_moves_a_drifted_item_back_in_flight
+test_relaunch_keeps_an_in_flight_task_held_for_the_captain_held
+test_spawn_relaunch_keeps_an_in_flight_task_held_for_the_captain_held
+test_relaunch_still_refuses_rows_a_captain_hold_does_not_cover
+test_fresh_spawn_of_an_in_flight_task_held_for_the_captain_is_refused
+test_interrupted_held_relaunch_verifies_the_hold_it_kept

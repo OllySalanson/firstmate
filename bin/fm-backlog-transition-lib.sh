@@ -818,15 +818,26 @@ fm_backlog_meta_spawn_gen_optional() {  # <meta> <state>
   fm_backlog_meta_spawn_gen "$meta" "$state"
 }
 
-fm_backlog_row_dispatchable() {
+fm_backlog_row_dispatchable() {  # <row-state> [hold-kind, unused]
   case "$1" in
     in_flight\ no\ no|queued\ no\ no) return 0 ;;
     *) return 1 ;;
   esac
 }
 
+# A relaunch replaces the worker of a task that already exists, so it also
+# accepts an unblocked In-flight row held for the captain: that hold waits on
+# the captain's decision, not on whether the task's worker may run. Every other
+# held row, including a Queued one, still refuses like a fresh dispatch.
+fm_backlog_row_relaunchable() {  # <row-state> <hold-kind>
+  fm_backlog_row_dispatchable "$1" && return 0
+  [ "$1" = "in_flight yes no" ] && [ "$2" = captain ]
+}
+
+# <meta> <data> <id> <state> [relaunch]: with `relaunch` the row is judged by
+# fm_backlog_row_relaunchable instead of fm_backlog_row_dispatchable.
 fm_backlog_dispatch_transition() {
-  local meta=$1 data=$2 id=$3 state=$4 row row_status
+  local meta=$1 data=$2 id=$3 state=$4 relaunch=${5:-} row row_status accept
   fm_backlog_record_present "$meta" "task record" "$state" || return 1
   fm_backlog_row_probe "$data" "$id"
   row_status=$?
@@ -839,12 +850,14 @@ fm_backlog_dispatch_transition() {
     return "$row_status"
   fi
   row=$FM_BACKLOG_ROW_STATE
-  if ! fm_backlog_row_dispatchable "$row"; then
+  accept=fm_backlog_row_dispatchable
+  [ "$relaunch" != relaunch ] || accept=fm_backlog_row_relaunchable
+  if ! "$accept" "$row" "$FM_BACKLOG_ROW_HOLD_KIND"; then
     FM_BACKLOG_TRANSITION_ERROR="backlog item $id is not dispatchable in state $row"
     return 1
   fi
   case "$row" in
-    in_flight\ no\ no) return 0 ;;
+    in_flight\ *) return 0 ;;
     queued\ no\ no) fm_backlog_start "$data" "$id" ;;
   esac
 }
@@ -891,6 +904,7 @@ fm_backlog_atomic_transition() {
     publish) fm_backlog_record_publish "$@" ;;
     remove) fm_backlog_record_remove "$@" ;;
     dispatch) fm_backlog_dispatch_transition "$@" ;;
+    relaunch) fm_backlog_dispatch_transition "$@" relaunch ;;
     rollback) fm_backlog_dispatch_rollback "$@" ;;
     close) fm_backlog_close_transition "$@" ;;
     retain) fm_backlog_retain_transition "$@" ;;

@@ -408,7 +408,9 @@
 # unheld, unblocked Queued or In flight item for the id; a transition that fails
 # after publication removes the record it just wrote rather than leaving a
 # worker the backlog does not own. A relaunch re-reads the row instead of
-# re-running the transition, so an eligible In-flight item is left untouched.
+# re-running the transition, so an eligible In-flight item is left untouched;
+# it also accepts an In-flight item held for the captain and keeps that hold
+# (bin/fm-backlog-transition-lib.sh's fm_backlog_row_relaunchable).
 # The transition is
 # skipped entirely for --secondmate spawns (persistent agents are not work
 # items), on a config/backlog-backend=manual home, and in a markdown home that
@@ -3223,10 +3225,14 @@ herdr_projection_existing_meta_allows_flat() { # <meta>
 # a live pane. The authoritative mutation still runs under the meta lock below.
 BACKLOG_TRANSITION=0
 BACKLOG_ROW_STATE=
+BACKLOG_ROW_HOLD_KIND=
+BACKLOG_ROW_ACCEPT=fm_backlog_row_dispatchable
+[ "$RELAUNCH" -eq 0 ] || BACKLOG_ROW_ACCEPT=fm_backlog_row_relaunchable
 if fm_backlog_transition_applies "$CONFIG" "$DATA" "$KIND"; then
   BACKLOG_TRANSITION=1
   if fm_backlog_row_probe "$DATA" "$ID"; then
     BACKLOG_ROW_STATE=$FM_BACKLOG_ROW_STATE
+    BACKLOG_ROW_HOLD_KIND=$FM_BACKLOG_ROW_HOLD_KIND
   elif [ "$FM_BACKLOG_ROW_RESULT" = not_found ]; then
     echo "error: task $ID has no backlog item in this home, so dispatching it would leave a worker no record owns; add it first (bin/fm-tasks-axi.sh add $ID '<title>' --kind $KIND) and re-run" >&2
     exit 1
@@ -3240,7 +3246,7 @@ if fm_backlog_transition_applies "$CONFIG" "$DATA" "$KIND"; then
       echo "error: spawn refused - the supervision branch under the away-posture record may dispatch only queued unblocked work (already queued, or filed by the branch from the captain's away words); task $ID has no dispatchable backlog item in this home" >&2
       exit 1
     fi
-  elif ! fm_backlog_row_dispatchable "$BACKLOG_ROW_STATE"; then
+  elif ! "$BACKLOG_ROW_ACCEPT" "$BACKLOG_ROW_STATE" "$BACKLOG_ROW_HOLD_KIND"; then
     echo "error: this home's backlog item $ID is not dispatchable in state $BACKLOG_ROW_STATE; refusing before creating its endpoint or local copy" >&2
     exit 1
   fi
@@ -4669,7 +4675,11 @@ fi
 # point below so every earlier launch-delivery failure remains unwindable.
 spawn_commit_backlog_transition() {
   [ "$BACKLOG_TRANSITION" = 1 ] || return 0
-  fm_backlog_atomic_transition dispatch "$STATE/$ID.meta" "$DATA" "$ID" "$STATE"
+  if [ "$RELAUNCH" -eq 1 ]; then
+    fm_backlog_atomic_transition relaunch "$STATE/$ID.meta" "$DATA" "$ID" "$STATE"
+  else
+    fm_backlog_atomic_transition dispatch "$STATE/$ID.meta" "$DATA" "$ID" "$STATE"
+  fi
 }
 
 # The deferred-signal exit path's preservation report. A claim about preserved
@@ -4679,6 +4689,12 @@ spawn_commit_backlog_transition() {
 # and the backlog row under the same per-task lock as the commit, repairs a row
 # the commit believed it moved, and sets SPAWN_PRESERVED_CLAIM to exactly what
 # was verified or attempted - never intent phrased as outcome.
+# In flight as this spawn may leave it: unheld, or captain-held for a relaunch.
+spawn_row_reads_in_flight() {
+  [ "${FM_BACKLOG_ROW_STATE%% *}" = in_flight ] &&
+    "$BACKLOG_ROW_ACCEPT" "$FM_BACKLOG_ROW_STATE" "$FM_BACKLOG_ROW_HOLD_KIND"
+}
+
 spawn_report_preserved_state() {
   local repair_error=
   if ! fm_backlog_record_present "$STATE/$ID.meta" "task record" "$STATE"; then
@@ -4693,7 +4709,7 @@ spawn_report_preserved_state() {
     fi
     return 1
   fi
-  if [ "$FM_BACKLOG_ROW_STATE" = "in_flight no no" ]; then
+  if spawn_row_reads_in_flight; then
     SPAWN_PRESERVED_CLAIM="verified preserved: its paired task record is present and its backlog item is In flight"
     return 0
   fi
@@ -4702,7 +4718,7 @@ spawn_report_preserved_state() {
   fm_backlog_start "$DATA" "$ID" || repair_error=$FM_BACKLOG_TRANSITION_ERROR
   if [ -z "$repair_error" ] &&
     fm_backlog_row_probe "$DATA" "$ID" &&
-    [ "$FM_BACKLOG_ROW_STATE" = "in_flight no no" ]; then
+    spawn_row_reads_in_flight; then
     SPAWN_PRESERVED_CLAIM="its backlog item did not read back In flight after the commit; it was moved to In flight now and verified, together with its paired task record"
     return 0
   fi
