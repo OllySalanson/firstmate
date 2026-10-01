@@ -279,8 +279,8 @@ write_task_meta() {
     "mode=no-mistakes"
 }
 
-# Extra "field=value" arguments are written before pr=, because
-# fm_pr_metadata_identity_parse rejects an unrecognised line after it.
+# Extra "field=value" arguments are written before pr=, the shape
+# bin/fm-pr-check.sh leaves; a field appended after it is its own case.
 write_poll_meta() {
   local state=$1 id=$2 url=$3 case_dir
   case_dir=$(cd "$state/../.." && pwd)
@@ -960,6 +960,43 @@ test_static_poll_contract() {
   [ "$rc" -eq 0 ] || fail "watcher did not surface merged poll"
   [ "$(grep -c '^check: .*: merged$' "$dir/watch.out")" -eq 1 ] || fail "watcher did not convert merged output into exactly one wake"
   pass "static poll is silent except for one merged line and remains watcher-bounded"
+}
+
+# Other owners republish or append to the task record after the poll is armed
+# (a relaunch's transaction tag, a captain-hold attestation). Those fields never
+# change the recorded PR, so the watcher must keep running the poll; a malformed
+# pr_head= after the PR still refuses it.
+test_fields_appended_after_pr_keep_the_poll_authenticated() {
+  local dir rc
+  dir=$(make_case appended-after-pr)
+  write_poll_meta "$dir/home/state" task-a https://github.com/o/r/pull/1
+  fm_pr_poll_prepare "$dir/home/state" task-a github https://github.com/o/r/pull/1 github.com o/r 1 "$POLL" \
+    || fail "could not prepare appended-field poll"
+  fm_pr_poll_publish_prepared || fail "could not publish appended-field poll"
+  printf '%s\n' 'control_relaunch_tx=123.20261001T000000Z.1' 'decisions_reviewed=1' 'decision_keys=' \
+    >> "$dir/home/state/task-a.meta"
+  rm -f "$dir/home/state/.last-check"
+  set +e
+  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "watcher did not complete with fields appended after pr="
+  assert_no_grep 'rejected unauthenticated' "$dir/watch.out" "a field appended after pr= revoked the PR poll"
+  [ "$(grep -c '^check: .*: merged$' "$dir/watch.out")" -eq 1 ] \
+    || fail "watcher did not run the PR poll with fields appended after pr=: $(cat "$dir/watch.out")"
+
+  dir=$(make_case invalid-head-after-pr)
+  write_poll_meta "$dir/home/state" task-a https://github.com/o/r/pull/1
+  fm_pr_poll_prepare "$dir/home/state" task-a github https://github.com/o/r/pull/1 github.com o/r 1 "$POLL" \
+    || fail "could not prepare invalid-head poll"
+  fm_pr_poll_publish_prepared || fail "could not publish invalid-head poll"
+  printf '%s\n' 'decisions_reviewed=1' 'pr_head=not-a-head' >> "$dir/home/state/task-a.meta"
+  rm -f "$dir/home/state/.last-check"
+  set +e
+  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  set -e
+  assert_grep 'rejected unauthenticated state checks' "$dir/watch.out" "an invalid pr_head= after pr= was accepted"
+  pass "fields appended after pr= keep the PR poll authenticated while an invalid pr_head still refuses"
 }
 
 test_atomic_interruption_leaves_no_partial_artifact() {
@@ -3416,6 +3453,7 @@ test_direct_pr_unpushed_commit_refuses_registration
 test_valid_recording_and_merge_derivation
 test_rejected_metacharacter_bytes_are_inert
 test_static_poll_contract
+test_fields_appended_after_pr_keep_the_poll_authenticated
 test_atomic_interruption_leaves_no_partial_artifact
 test_concurrent_watcher_sees_only_complete_publication
 test_poll_publication_refuses_unsafe_destinations

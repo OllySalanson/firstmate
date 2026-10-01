@@ -592,6 +592,62 @@ test_relaunch_preserves_durable_task_metadata() {
   pass "fm-control relaunch: durable task metadata survives replacement launch publication"
 }
 
+# arm_pr_poll <case-dir> <id> <url>: record pr=/pr_head= last in the task record
+# and publish the static merge poll, the same shape bin/fm-pr-check.sh leaves.
+arm_pr_poll() {
+  local dir=$1 id=$2 url=$3 state="$1/home/state"
+  (
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-pr-lib.sh"
+    fm_pr_url_parse "$url" || exit 1
+    {
+      grep -v -e '^pr=' -e '^pr_head=' "$state/$id.meta"
+      printf 'pr=%s\npr_head=%s\n' "$FM_PR_URL" 0123456789abcdef0123456789abcdef01234567
+    } > "$state/.$id.meta.arm" && chmod 0600 "$state/.$id.meta.arm" \
+      && mv -f "$state/.$id.meta.arm" "$state/$id.meta" || exit 1
+    fm_pr_poll_prepare "$state" "$id" "$FM_PR_PROVIDER" "$FM_PR_URL" "$FM_PR_HOST" \
+      "$FM_PR_PATH" "$FM_PR_NUMBER" "$ROOT/bin/fm-pr-poll.sh" || exit 1
+    fm_pr_poll_publish_prepared
+  )
+}
+
+# pr_poll_authenticated <case-dir> <id>: the watcher's own acceptance test for a
+# task's static merge poll (bin/fm-watch.sh's slow-check loop).
+pr_poll_authenticated() {
+  (
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-pr-lib.sh"
+    fm_pr_poll_snapshot_capture "$1/home/state" "$2" "$ROOT/bin/fm-pr-poll.sh"
+  )
+}
+
+test_relaunch_keeps_an_armed_pr_poll_authenticated() {
+  local dir out rc
+  dir=$(new_case pr-poll rl60)
+  add_ship_task "$dir" rl60 claude
+  arm_pr_poll "$dir" rl60 https://github.com/example/repo/pull/60 \
+    || fail "could not arm the PR poll fixture"
+  pr_poll_authenticated "$dir" rl60 || fail "the freshly armed PR poll should authenticate"
+
+  out=$(run_control "$dir" rl60 relaunch --note "continuing after review"); rc=$?
+  expect_code 0 "$rc" "relaunch of a PR-armed task should succeed"$'\n'"$out"
+  [ "$(meta_field "$dir" rl60 pr)" = "https://github.com/example/repo/pull/60" ] \
+    || fail "the task PR must survive relaunch"
+  pr_poll_authenticated "$dir" rl60 \
+    || fail "relaunch must keep the armed PR merge poll authenticated, got record:"$'\n'"$(cat "$dir/home/state/rl60.meta")"
+
+  dir=$(new_case pr-poll-spawn rl61)
+  add_ship_task "$dir" rl61 claude
+  arm_pr_poll "$dir" rl61 https://github.com/example/repo/pull/61 \
+    || fail "could not arm the direct relaunch PR poll fixture"
+  printf 'zsh' > "$dir/fake/command"
+  out=$(run_spawn "$dir" rl61 --relaunch); rc=$?
+  expect_code 0 "$rc" "a direct relaunch of a PR-armed task should succeed"$'\n'"$out"
+  pr_poll_authenticated "$dir" rl61 \
+    || fail "a direct relaunch must keep the armed PR merge poll authenticated, got record:"$'\n'"$(cat "$dir/home/state/rl61.meta")"
+  pass "fm-control relaunch: an armed PR merge poll stays authenticated across the republished record"
+}
+
 test_relaunch_serializes_concurrent_durable_metadata_publication() {
   local dir control_pid link_pid rc i=0 traceparent prepare launch_release waiting ready release
   dir=$(new_case metadata-race rl28)
@@ -2366,6 +2422,7 @@ test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven
 test_relaunch_from_linked_home_preserves_recorded_worktree
 test_relaunch_preserves_durable_task_metadata
+test_relaunch_keeps_an_armed_pr_poll_authenticated
 test_relaunch_serializes_concurrent_durable_metadata_publication
 test_disabled_relaunch_clears_prior_trace_context
 test_relaunch_appends_the_progress_note_to_the_instructions
