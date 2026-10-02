@@ -1,0 +1,5 @@
+### lib=fixed  ()
+ok - fm-control relaunch: an armed PR merge poll stays authenticated across the republished record
+rc=0
+ok - fields appended after pr= keep the PR poll authenticated while an invalid pr_head still refuses
+rc=0

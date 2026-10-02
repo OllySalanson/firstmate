@@ -1,0 +1,21 @@
+### lib=prefix  ( 1 file changed, 8 insertions(+), 8 deletions(-))
+not ok - relaunch must keep the armed PR merge poll authenticated, got record:
+window=fmses:fm-rl60
+endpoint_task_id=rl60
+worktree=/tmp/fm-control-relaunch.mYUNhI/pr-poll-9427/wt
+project=/tmp/fm-control-relaunch.mYUNhI/pr-poll-9427/proj
+harness=claude
+kind=ship
+mode=no-mistakes
+yolo=off
+tasktmp=/tmp/fm-rl60
+model=default
+effort=default
+busy_gen=g1790905861.2854259.11108
+spawn_gen=s1790905861.2853013.11597
+pr=https://github.com/example/repo/pull/60
+pr_head=0123456789abcdef0123456789abcdef01234567
+control_relaunch_tx=2851909.20261002T015100Z.23978
+rc=1
+not ok - a field appended after pr= revoked the PR poll
+rc=1
