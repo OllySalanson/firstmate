@@ -89,7 +89,9 @@ chmod +x "$TMP_ROOT/fake-send" "$TMP_ROOT/fake-ping" "$TMP_ROOT/fake-ss"
 fake_proc() {
   local pid=$1 ppid=$2 rss=$3 cwd=$4
   shift 4
-  mkdir -p "$P/$pid"
+  mkdir -p "$P/$pid/task"
+  # Each fake process is single-threaded: its one thread is the process itself.
+  ln -sfn .. "$P/$pid/task/$pid"
   printf '%s\0' "$@" >"$P/$pid/cmdline"
   printf 'Name:\t%s\nState:\tS (sleeping)\nPid:\t%s\nPPid:\t%s\nVmRSS:\t%s kB\n' \
     "${1##*/}" "$pid" "$ppid" "$rss" >"$P/$pid/status"
@@ -820,6 +822,20 @@ test_history_explains_a_window() {
   pass "history explains a time window in plain words: ranges, peaks, held-back work, the busiest worker, throttles, gaps, actions, and a timeline"
 }
 
+test_history_window_may_run_past_now() {
+  local out now zone
+  new_case histnow
+  now=$(date +%s)
+  # A zone where it is about noon, so the window never crosses midnight.
+  zone="FMT$(($(TZ=UTC date -d "@$now" +%-H) - 12))"
+  printf '%s\tmem=77\tpsi=5.0\n' $((now - 120)) >"$H/state/watchdog-history"
+  out=$(TZ=$zone wd history --since "$(TZ=$zone date -d "@$((now - 600))" +%H:%M)" \
+    --until "$(TZ=$zone date -d "@$((now + 900))" +%H:%M)") || fail "a window running past now was refused: $out"
+  assert_contains "$out" "(1 samples" "the window running past now lost the latest sample"
+  assert_not_contains "$out" "to $(TZ=$zone date -d "@$((now + 900))" +%H:%M)" "the window was not cut off at now"
+  pass "a history window that runs past now, such as during a slowdown, ends at now"
+}
+
 test_history_rotates_at_its_size_limit() {
   local i
   new_case rotate
@@ -886,6 +902,7 @@ test_connection_throttle_pauses_the_heaviest_traffic_only
 test_overload_from_elsewhere_reports_once
 test_poll_continues_commands_a_dead_loop_left_paused
 test_history_explains_a_window
+test_history_window_may_run_past_now
 test_history_rotates_at_its_size_limit
 test_processor_and_connection_config
 echo "# all fm-memory-watchdog tests passed"

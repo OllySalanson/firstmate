@@ -62,8 +62,9 @@
 # (SIGCONT), checking the recorded start time so a recycled pid is never
 # signaled. A worker agent itself is never stopped: a shell-launched agent
 # that stops is taken over by its shell's job control and would stay frozen
-# after SIGCONT. Lowering priority sets every tree member, agent included, to
-# niceness FM_LOAD_NICE (10) when it is lower, so new commands inherit it;
+# after SIGCONT. Lowering priority sets every thread (<proc>/<pid>/task/*) of
+# every tree member, agent included, to niceness FM_LOAD_NICE (10) when it is
+# lower, so running threads slow down and new commands and threads inherit it;
 # an unprivileged process cannot raise it back.
 #
 # History (fm_load_history_append). Each analysis sample appends one line of
@@ -527,17 +528,24 @@ fm_load_resume() {
   done
 }
 
-# fm_load_renice_tree <roots>: lower every member of the roots' trees to
-# FM_LOAD_NICE when its niceness is lower.
+# fm_load_renice_tree <roots>: lower every thread of every member of the
+# roots' trees to FM_LOAD_NICE when its niceness is lower; Linux sets the
+# niceness of one thread at a time.
 fm_load_renice_tree() {
-  local tree pid nice _t _k _s _r
+  local tree proc pid _t _r
   tree=$(mktemp "${TMPDIR:-/tmp}/fm-load-tree.XXXXXX") || return 0
   fm_load_tree_of "$1" "$tree"
-  while IFS="$(printf '\t')" read -r _t pid _k _s nice _r; do
-    case "$nice" in '' | *[!0-9-]*) continue ;; esac
-    [ "$nice" -lt "$FM_LOAD_NICE" ] || continue
-    renice -n "$FM_LOAD_NICE" -p "$pid" >/dev/null 2>&1 || true
-  done <"$tree"
+  proc=$(fm_memory_proc_root)
+  while IFS="$(printf '\t')" read -r _t pid _r; do
+    cat "$proc/$pid"/task/[0-9]*/stat 2>/dev/null
+  done <"$tree" | awk -v floor="$FM_LOAD_NICE" '
+    {
+      i = length($0)
+      while (i > 0 && substr($0, i, 1) != ")") i--
+      if (i == 0 || split(substr($0, i + 2), f, " ") < 20) next
+      if (f[17] ~ /^-?[0-9]+$/ && f[17] + 0 < floor) print $1
+    }
+  ' | xargs -r renice -n "$FM_LOAD_NICE" -p >/dev/null 2>&1 || true
   rm -f "$tree"
 }
 

@@ -466,10 +466,11 @@ cmd_queue() {
 
 # --- history -------------------------------------------------------------------
 
-# parse_when <text> <now>: an epoch for a history bound - plain epoch seconds,
-# or anything `date -d` reads; a bare HH:MM later than now means yesterday.
+# parse_when <text> <now> [day]: an epoch for a history bound - plain epoch
+# seconds, or anything `date -d` reads. A bare HH:MM falls on the day of the
+# epoch [day] when given, else today, or yesterday when that is later than now.
 parse_when() {
-  local text=$1 now=$2 epoch
+  local text=$1 now=$2 day=${3:-} epoch
   case "$text" in
     '' | *[!0-9]*) ;;
     ?????????*)
@@ -477,9 +478,16 @@ parse_when() {
       return 0
       ;;
   esac
-  epoch=$(date -d "$text" +%s 2>/dev/null) || return 1
   case "$text" in
-    [0-9]:[0-9][0-9] | [0-9][0-9]:[0-9][0-9]) [ "$epoch" -le "$now" ] || epoch=$((epoch - 86400)) ;;
+    [0-9]:[0-9][0-9] | [0-9][0-9]:[0-9][0-9])
+      if [ -n "$day" ]; then
+        epoch=$(date -d "$(date -d "@$day" +%F) $text" +%s 2>/dev/null) || return 1
+      else
+        epoch=$(date -d "$text" +%s 2>/dev/null) || return 1
+        [ "$epoch" -le "$now" ] || epoch=$((epoch - 86400))
+      fi
+      ;;
+    *) epoch=$(date -d "$text" +%s 2>/dev/null) || return 1 ;;
   esac
   printf '%s\n' "$epoch"
 }
@@ -512,10 +520,15 @@ cmd_history() {
     from=$((now - 1800))
   fi
   if [ -n "$until" ]; then
-    to=$(parse_when "$until" "$now") || {
+    if [ -n "$since" ]; then
+      to=$(parse_when "$until" "$now" "$from")
+    else
+      to=$(parse_when "$until" "$now")
+    fi || {
       echo "error: could not read --until '$until' as a time" >&2
       return 2
     }
+    [ "$to" -le "$now" ] || to=$now
   else
     to=$now
   fi
