@@ -1,0 +1,69 @@
+Threads of real worker command 2005841 before overload (tid nice):
+2005841   5
+2005858   5
+2005860   5
+
+$ fm-memory-watchdog.sh status   # calm machine
+memory gate: open - 40% of 10.0 GB RAM in use; 0 just-started worker(s) reserved, counted 40%
+processor gate: open - no processor reading on this platform
+connection gate: open - no recent latency reading from 1.1.1.1
+room: yes - a new worker would be admitted now
+lines: closes at 85%, reopens below 70%, critical stop at 95%; each new worker reserves 1024 MB for 180s
+job ceilings: one headless browser tree 1536 MB, one test or terraform job 3072 MB
+processor lines: closes at pressure 25% or load 90% of cores, reopens below 10% and 70%, throttles after 1s at 50% or 115%
+connection lines: closes at 80 ms above normal latency, reopens below 30 ms above, throttles after 1s at 200 ms above
+throttled: nothing
+flagship: none (set with bin/fm-memory-watchdog.sh flagship <project>)
+deferred work: none
+watchdog loop: running (pid 2006368, every 3s)
+history: no samples yet (the loop writes one every 15s while it runs)
+
+$ # processor pressure 64%, load 9.30 on 8 cores, latency 180 ms vs normal 38
+
+$ fm-memory-watchdog.sh admit next-worker
+deferred: next-worker stays queued - the processor gate is closed (pressure 64.0%, load 9.30 on 8 cores (116%); it closes at pressure 25% or load 90% of cores and reopens below 10% and 70%). The watchdog notifies firstmate when room frees; bin/fm-memory-watchdog.sh status shows the gates. Pass --memory-override only for a spawn the captain explicitly directed.
+exit=75
+
+Threads of 2005841 after the processor throttle's first stage (tid nice):
+2005841  10
+2005858  10
+2005860  10
+
+$ fm-memory-watchdog.sh status   # during overload
+memory gate: open - 40% of 10.0 GB RAM in use; 0 just-started worker(s) reserved, counted 40%
+processor gate: closed - pressure 64.0%, load 9.30 on 8 cores (116%)
+connection gate: closed - latency to 1.1.1.1 180 ms against a normal 38 ms
+room: no - a new worker would be deferred and started when the processor calms down
+lines: closes at 85%, reopens below 70%, critical stop at 95%; each new worker reserves 1024 MB for 180s
+job ceilings: one headless browser tree 1536 MB, one test or terraform job 3072 MB
+processor lines: closes at pressure 25% or load 90% of cores, reopens below 10% and 70%, throttles after 1s at 50% or 115%
+connection lines: closes at 80 ms above normal latency, reopens below 30 ms above, throttles after 1s at 200 ms above
+throttled: fm-research's work runs at lower priority for the processor since 18:39
+flagship: none (set with bin/fm-memory-watchdog.sh flagship <project>)
+deferred work: next-worker
+watchdog loop: running (pid 2006368, every 3s)
+history: 2 samples since 2026-10-02 18:39 (bin/fm-memory-watchdog.sh history --since HH:MM --until HH:MM explains a window)
+recent events:
+  2026-10-02 18:39  processor critical: overloaded for 1s (pressure 64.0%, load 9.30 on 8 cores (116%)), so the watchdog lowered the priority of fm-research's work (about 4.0 cores) and told its worker
+
+$ fm-memory-watchdog.sh poll
+memory-watchdog: processor critical: overloaded for 1s (pressure 64.0%, load 9.30 on 8 cores (116%)), so the watchdog lowered the priority of fm-research's work (about 4.0 cores) and told its worker
+
+Messages sent to the worker:
+Watchdog: this machine's processor has been overloaded for 1 seconds (pressure 64.0%, load 9.30 on 8 cores (116%)), and your work is using the most of it (about 4.0 cores). That makes the owner's own programs lag, so I lowered the priority of your agent and its commands. If it stays overloaded I will start pausing your running commands in short turns - nothing is killed. Cut parallelism now: fewer subagents, fewer parallel commands and downloads, capped test workers.
+
+$ tail -n 2 state/watchdog-history
+1790962745	mem=40	psi=64.0	load=9.30	cores=8	up=-	down=-	rtt=180	base=38	gates=mem:open,cpu:closed,net:closed	topcpu=-	topnet=-	throttle=-
+1790962746	mem=40	psi=64.0	load=9.30	cores=8	up=-	down=-	rtt=180	base=38	gates=mem:open,cpu:closed,net:closed	topcpu=fm-research:4.00	topnet=-	throttle=-
+
+$ fm-memory-watchdog.sh history --since '5 minutes ago'
+Watchdog history, Fri 2 Oct 18:34 to 18:39 (2 samples, about one every 1s):
+Memory: 40% to 40% in use, 40% on average; the memory gate stayed open.
+Processor (8 cores): pressure averaged 64%, peaking at 64% at 18:39; load averaged 9.30, peaking at 9.30 (116% of the cores) at 18:39. New work was held back 18:39 onward.
+Connection: Latency averaged 180 ms against a normal 38 ms, peaking at 180 ms at 18:39. New work was held back 18:39 onward.
+Busiest worker: fm-research used the most processor in 100% of the samples that measured it (up to 4.0 cores).
+Gaps: no samples before 18:39 - the watchdog was not running then (it runs only while this home has workers or deferred work).
+Watchdog actions:
+  18:39  processor critical: overloaded for 1s (pressure 64.0%, load 9.30 on 8 cores (116%)), so the watchdog lowered the priority of fm-research's work (about 4.0 cores) and told its worker
+Timeline (1 minute steps):
+  18:39  memory 40%  pressure 64%  load 9.3  latency 180 ms  busiest fm-research
