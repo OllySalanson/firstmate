@@ -3629,7 +3629,10 @@ export default function (pi: ExtensionAPI): void {
 }
 TS
   printf '%s\n' '{"tui.input.submit":"alt+s"}' >"$config/keybindings.json"
-  printf '%s\n' '{"hideThinkingBlock":true}' >"$config/settings.json"
+  # This case reads the restored transcript back from tmux scrollback, which Pi
+  # 1.0's default fullscreen mode never writes; regular mode keeps it. Older Pi
+  # ignores the setting, and the other E2E cases still run Pi's default mode.
+  printf '%s\n' '{"hideThinkingBlock":true,"tuiMode":"regular"}' >"$config/settings.json"
   now=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
   cat >"$session_file" <<JSON
 {"type":"session","version":3,"id":"11111111-1111-4111-8111-111111111111","timestamp":"$now","cwd":"$project"}
@@ -3867,7 +3870,19 @@ if (!messages || !tree) process.exit(1);
 if (!/<div class="user-message"[^>]*>[\s\S]*Show a deterministic tool example\./.test(messages)) process.exit(1);
 if (!/<div class="assistant-message"[^>]*>[\s\S]*The deterministic tool example is complete\./.test(messages)) process.exit(1);
 if (messages.includes('<div class="hook-message"')) process.exit(1);
-if (messages.includes("[firstmate-synthetic-input]")) process.exit(1);
+// Pi 0.99 and later render a display:false custom message in the export's
+// transcript as a hidden-by-default row behind Pi's show-hidden-messages toggle,
+// while earlier Pi omits it. Either way the default conversation must not show
+// the synthetic row, so every occurrence has to be the header of such a hidden row.
+const synthetic = "[firstmate-synthetic-input]";
+for (let at = messages.indexOf(synthetic); at >= 0; at = messages.indexOf(synthetic, at + 1)) {
+  const row = messages.lastIndexOf('<div class="hook-message', at);
+  if (!messages.startsWith('<div class="hook-message hook-message-hidden"', row)) process.exit(1);
+  if (!messages.slice(0, at).endsWith('<div class="hook-type">')) process.exit(1);
+  if (messages.slice(row, at).split("</div>").length !== 2) process.exit(1);
+  if (/<body[^>]*class="[^"]*show-hidden-messages/.test(dom)) process.exit(1);
+  if (!/body:not\(\.show-hidden-messages\) \.hook-message-hidden \{\s*display: none;/.test(dom)) process.exit(1);
+}
 for (const current of ["CURRENT_WATCHER_E2E", "CURRENT_TURN_END_E2E", "CURRENT_AWAY_E2E", "CURRENT_FROM_FIRSTMATE_E2E", "CURRENT_LAUNCH_BRIEF_E2E"]) {
   if (!messages.includes(current)) process.exit(1);
 }

@@ -108,8 +108,7 @@ jobs:
       - name: Install the Pi package for the Pi extension tests
         run: |
           set -eu
-          # Pinned: pi-coding-agent 1.0.0 breaks the Pi extension tests; adapting them to 1.0 is follow-up work.
-          npm install -g @earendil-works/pi-coding-agent@0.87.1
+          npm install -g @earendil-works/pi-coding-agent
           npm ls -g --depth 0 @earendil-works/pi-coding-agent
       - name: Run portable parallel shard 1
         run: |
@@ -213,8 +212,7 @@ jobs:
       - name: Install the Pi package for the Pi extension tests
         run: |
           set -eu
-          # Pinned: pi-coding-agent 1.0.0 breaks the Pi extension tests; adapting them to 1.0 is follow-up work.
-          npm install -g @earendil-works/pi-coding-agent@0.87.1
+          npm install -g @earendil-works/pi-coding-agent
           npm ls -g --depth 0 @earendil-works/pi-coding-agent
       - name: Run portable serial shard ${{ matrix.shard }}
         env:

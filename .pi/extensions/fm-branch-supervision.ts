@@ -99,7 +99,7 @@ import {
   type ExtensionCommandContext,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Box, Container, fuzzyFilter, Input, SelectList, Text } from "@earendil-works/pi-tui";
+import { Box, type Component, Container, fuzzyFilter, Input, SelectList, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { registerFirstmateTool } from "./lib/fm-native-contract.ts";
 import { runCommandAsync } from "./lib/fm-async-exec.ts";
@@ -2133,9 +2133,30 @@ ${context.command}
     return stockOutcomesPreviewLines ?? undefined;
   };
 
+  // Pi's own call line for a tool without a call renderer, taken from a
+  // self-shell stock row so this self-rendered shell keeps whatever the
+  // installed Pi shows there: the bare title before 0.99, the title plus its
+  // arguments since. A self-shell row renders a leading spacer, then the line.
+  const stockOutcomesCallLine = (toolName: string, args: unknown, expanded: boolean): Component => {
+    const stockRow = new ToolExecutionComponent(
+      toolName,
+      `${toolName}-stock-call`,
+      args,
+      { showImages: false },
+      { renderShell: "self" },
+      { requestRender() {} } as ConstructorParameters<typeof ToolExecutionComponent>[5],
+      root,
+    );
+    stockRow.setExpanded(expanded);
+    return {
+      render: (width: number) => stockRow.render(width).slice(1),
+      invalidate: () => stockRow.invalidate(),
+    };
+  };
+
   type OutcomesToolShellState = {
     shell?: Box;
-    call?: Text;
+    call?: Component;
     result?: Text | Container;
   };
   const refreshOutcomesToolShell = (
@@ -2167,11 +2188,11 @@ ${context.command}
       recent: Type.Optional(Type.Number({ description: "How many most-recent outcomes to read (default 20)" })),
     }),
     renderShell: "self",
-    renderCall: (_args, theme, context) => {
+    renderCall: (args, theme, context) => {
       if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
       if (calmHides("assistant-tool-call")) return new Container();
       const shellState = context.state as OutcomesToolShellState;
-      shellState.call = new Text(theme.fg("toolTitle", theme.bold("fm_branch_outcomes")), 0, 0);
+      shellState.call = stockOutcomesCallLine("fm_branch_outcomes", args, context.expanded);
       return refreshOutcomesToolShell(shellState, theme, context);
     },
     renderResult: (result, options, theme, context) => {
@@ -2229,11 +2250,11 @@ ${context.command}
       through: Type.Number({ description: "The highest outcome sequence number this conversation has processed" }),
     }),
     renderShell: "self",
-    renderCall: (_args, theme, context) => {
+    renderCall: (args, theme, context) => {
       if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
       if (calmHides("assistant-tool-call")) return new Container();
       const shellState = context.state as OutcomesToolShellState;
-      shellState.call = new Text(theme.fg("toolTitle", theme.bold("fm_branch_processed")), 0, 0);
+      shellState.call = stockOutcomesCallLine("fm_branch_processed", args, context.expanded);
       return refreshOutcomesToolShell(shellState, theme, context);
     },
     renderResult: (result, _options, theme, context) => {
