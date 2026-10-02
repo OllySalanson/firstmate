@@ -1,0 +1,7 @@
+ok - relaunch re-reads the backlog item instead of blindly re-running the transition
+ok - relaunch heals an item that drifted out of In flight while the task stayed live
+not ok - a relaunch of an In-flight task held for the captain must proceed
+warning: /tmp/fm-control-relaunch.x2yLOU/held-relaunch-13864/home/data/rl42/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+error: this home's backlog item rl42 is not dispatchable in state in_flight yes no; refusing before creating its endpoint or local copy
+error: the replacement agent for rl42 could not be launched on claude
+error: rl42's agent was stopped but the replacement did not launch; no agent is running, and its work plus the recorded progress note are preserved at /tmp/fm-control-relaunch.x2yLOU/held-relaunch-13864/wt: expected exit 0, got 1

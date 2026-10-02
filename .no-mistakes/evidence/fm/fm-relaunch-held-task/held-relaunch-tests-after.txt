@@ -1,0 +1,7 @@
+ok - relaunch re-reads the backlog item instead of blindly re-running the transition
+ok - relaunch heals an item that drifted out of In flight while the task stayed live
+ok - relaunch replaces the worker of an In-flight task held for the captain and keeps the hold
+ok - direct relaunch replaces the worker of an In-flight task held for the captain and keeps the hold
+ok - relaunch still refuses a held Queued item and a non-captain hold
+ok - a fresh spawn of an item held for the captain is still refused
+ok - an interrupted relaunch of a captain-held task verifies the held In-flight row it kept

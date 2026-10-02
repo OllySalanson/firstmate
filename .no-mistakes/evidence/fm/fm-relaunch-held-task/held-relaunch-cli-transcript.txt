@@ -1,0 +1,22 @@
+$ tasks-axi show rl90   # before
+  held: yes
+  hold_reason: captain decision pending
+  hold_kind: captain
+  section: in_flight
+
+$ fm-control.sh rl90 relaunch --note 'picking the work back up'
+warning: <case>/home/data/rl90/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+relaunched rl90 harness=claude from=claude model=default effort=default backend=tmux endpoint=fmses:fm-rl90 worktree=<case>/wt
+[exit 0]
+
+$ tasks-axi show rl90   # after
+  held: yes
+  hold_reason: captain decision pending
+  hold_kind: captain
+  section: in_flight
+
+--- fresh spawn of the same held task (must still refuse) ---
+$ fm-spawn.sh rl91 <proj> --harness claude --mode no-mistakes --yolo off
+warning: <case>/home/data/rl91/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+error: this home's backlog item rl91 is not dispatchable in state in_flight yes no; refusing before creating its endpoint or local copy
+[exit 1]
