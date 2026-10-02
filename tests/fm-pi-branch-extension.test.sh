@@ -81,11 +81,21 @@ export function keyHint(_keybinding, description) {
 }
 
 export class ToolExecutionComponent {
+  constructor(toolName) {
+    this.toolName = toolName;
+  }
   updateResult(result) {
     this.result = result;
   }
+  setExpanded(expanded) {
+    this.expanded = expanded;
+  }
+  invalidate() {}
   render() {
-    return (this.result?.content ?? [])
+    // Without a result this stands in for a self-shell call row: Pi's leading
+    // spacer, then its fallback call line.
+    if (!this.result) return ["", this.toolName];
+    return this.result.content
       .filter((item) => item.type === "text")
       .flatMap((item) => item.text.split("\n"));
   }
@@ -804,7 +814,7 @@ const calmOffResult = outcomesTool.renderResult(stockResult, { expanded: false, 
 if (calmOffCall.constructor.name !== "Box" || calmOffCall.paddingX !== 1 || calmOffCall.paddingY !== 1) {
   throw new Error("fm_branch_outcomes changed its ordinary shell rendering");
 }
-if (calmOffResult.constructor.name !== "Container" || calmOffCall.children[0]?.text !== "fm_branch_outcomes" || calmOffCall.children[1]?.text !== "OUTCOME_DUMP") {
+if (calmOffResult.constructor.name !== "Container" || calmOffCall.children[0]?.render(80).join("\n") !== "fm_branch_outcomes" || calmOffCall.children[1]?.text !== "OUTCOME_DUMP") {
   throw new Error("fm_branch_outcomes changed its ordinary call or result rendering");
 }
 const legacyStockResult = {
