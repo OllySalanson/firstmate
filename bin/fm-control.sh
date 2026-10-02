@@ -77,7 +77,7 @@
 #              inherits the local copy but none of the conversation; a
 #              secondmate reconciles its own home's records at startup, so its
 #              standing charter is never rewritten.
-#              A ship or scout relaunch asks the memory gate for admission
+#              A ship or scout relaunch asks the watchdog's gates for admission
 #              (bin/fm-memory-watchdog.sh admit --relaunch) after the checkpoint
 #              is proven and before anything is recorded or stopped; a deferral
 #              prints the gate's `deferred: ...` line and exits 75 with the old

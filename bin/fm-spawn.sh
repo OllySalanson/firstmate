@@ -249,12 +249,13 @@
 #   usable offline; a stale remote-tracking ref can therefore make an unpushed
 #   commit look contained, which is exactly why no remedy command is printed.
 # Memory admission (bin/fm-memory-watchdog.sh admit):
-#   Every ship or scout spawn, fresh or --relaunch, asks the memory gate for
-#   admission after the backlog preflight and before any endpoint, worktree, or
-#   record is created or touched. A closed gate, or one more worker that would
-#   cross its close line, DEFERS the spawn: it prints a `deferred: ...` line
+#   Every ship or scout spawn, fresh or --relaunch, asks the watchdog's memory,
+#   processor, and connection gates for admission after the backlog preflight
+#   and before any endpoint, worktree, or record is created or touched. A
+#   closed gate, or one more worker that would cross the memory close line,
+#   DEFERS the spawn: it prints a `deferred: ...` line
 #   naming the reason, leaves the backlog item queued (or the relaunched task's
-#   record and endpoint untouched), and exits 75, and the memory watchdog
+#   record and endpoint untouched), and exits 75, and the watchdog
 #   notifies firstmate when room frees (docs/configuration.md "Memory gate").
 #   Relaunch is gated because crash recovery after a machine freeze relaunches
 #   every task at once, which is exactly the burst the gate exists to spread.
