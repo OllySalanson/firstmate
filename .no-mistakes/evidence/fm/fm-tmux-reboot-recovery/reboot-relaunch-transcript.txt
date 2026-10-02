@@ -1,0 +1,37 @@
+### Task record (state/rl64.meta) written at spawn, before the reboot:
+window=fmses:fm-rl64
+tmux_boot=boot-before
+tmux_pidns=pid:[4026531836]
+tmux_server_pid=4242
+tmux_server_start=starttime=500
+tmux_pane_id=%3
+### Machine rebooted: current boot id = boot-now, no tmux server running
+
+$ fm-control.sh rl64 exit
+endpoint-gone rl64 harness=claude backend=tmux endpoint=fmses:fm-rl64 worktree=/tmp/fm-control-relaunch.WGaekO/tmux-reboot-23420/wt
+(exit code 0)
+
+$ fm-control.sh rl64 relaunch --note "the machine went down; pick the work back up"
+note: task rl64's recorded endpoint fmses:fm-rl64 is gone: the machine has restarted since the endpoint was created (boot boot-before, now boot-now), and no process survives a restart; re-creating it in the recorded worktree
+warning: /tmp/fm-control-relaunch.WGaekO/tmux-reboot-23420/home/data/rl64/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+no server running on /tmp/tmux-1000/default
+relaunched rl64 harness=claude from=claude model=default effort=default backend=tmux endpoint=firstmate:fm-rl64 worktree=/tmp/fm-control-relaunch.WGaekO/tmux-reboot-23420/wt
+(exit code 0)
+
+### Task record after relaunch:
+window=firstmate:fm-rl64
+worktree=/tmp/fm-control-relaunch.WGaekO/tmux-reboot-23420/wt
+tmux_boot=boot-now
+tmux_pidns=pid:[4026531836]
+tmux_server_pid=4343
+tmux_server_start=starttime=600
+tmux_pane_id=%9
+### Windows created: fm-rl64
+### Uncommitted work preserved: dirty, never committed
+
+
+### Contrast: a task record written before this change (no endpoint identity) still refuses safely:
+$ fm-control.sh rl70 relaunch --note "the machine went down"
+error: task rl70's endpoint fmses:fm-rl70 reads 'missing', but tmux absence cannot be proven from this task record: it carries no endpoint identity (it predates tmux_boot= recording), and a server-wide window inventory only describes the tmux server this process addresses, so a window absent from it may still be alive on another; exit will not claim an agent stopped at an address it cannot trust, nor send lifecycle input to one
+error: relaunch of rl70 failed while stopping the old agent and its state is 'missing', so it was not proven stopped; its original instructions were restored and the durable record was retained for recovery
+(exit code 1)
