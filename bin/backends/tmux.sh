@@ -438,3 +438,194 @@ fm_backend_tmux_agent_alive() {  # <target>
     *) printf 'unknown' ;;
   esac
 }
+
+# --- Endpoint identity and provable absence ---------------------------------
+#
+# fm_backend_tmux_agent_state's `missing` cannot by itself say a task window is
+# GONE: every tmux read describes only the server this process addresses, so a
+# window on a server it cannot see reads exactly like a destroyed one. These
+# helpers close that gap with kernel facts recorded at spawn rather than with
+# any wider tmux read:
+#
+#   tmux_boot=          the kernel boot identity the window was created in
+#                       (Linux /proc/sys/kernel/random/boot_id, macOS
+#                       kern.bootsessionuuid). A different current boot proves
+#                       every process of the recorded one - the tmux server and
+#                       the agent with it - is gone.
+#   tmux_pidns=         the pid namespace those pids are numbered in (Linux
+#                       only; absent where the platform has none).
+#   tmux_server_pid=    the server process that holds the window, and
+#   tmux_server_start=  that process's kernel start identity. Within one boot
+#                       and namespace a pid plus its start identity names one
+#                       process, so its absence proves the server - and every
+#                       window it held - is gone.
+#   tmux_pane_id=       the server-unique `%N` id of the agent's pane. It
+#                       survives renames and join-pane, move-pane, and
+#                       break-pane, so while the recorded server still runs and
+#                       IS the server this process addresses, that id missing
+#                       from its complete pane inventory proves the agent's
+#                       pane itself was closed.
+#
+# Wall-clock comparisons (boot time against spawn time) are deliberately not
+# used: WSL2's clock is observed to step after host sleep, and a stepped clock
+# could otherwise date a live window to before the current boot.
+#
+# FM_TMUX_PROC_ROOT_OVERRIDE (else FM_PROC_ROOT_OVERRIDE, as in
+# bin/fm-wake-lib.sh) relocates every /proc read here, so a test can stage a
+# restart or an exited server without relocating unrelated process reads.
+
+# The current kernel boot identity, or nonzero when the platform exposes none.
+fm_backend_tmux_boot_id() {
+  local proc_root=${FM_TMUX_PROC_ROOT_OVERRIDE:-${FM_PROC_ROOT_OVERRIDE:-/proc}} id=
+  if [ -r "$proc_root/sys/kernel/random/boot_id" ]; then
+    id=$(cat "$proc_root/sys/kernel/random/boot_id" 2>/dev/null) || id=
+  elif [ "$(uname 2>/dev/null)" = Darwin ]; then
+    id=$(sysctl -n kern.bootsessionuuid 2>/dev/null) || id=
+  fi
+  case "$id" in
+    ''|*[!A-Za-z0-9-]*) return 1 ;;
+  esac
+  printf '%s\n' "$id"
+}
+
+# This process's pid namespace, empty where the platform has no /proc
+# namespaces (a pid there is numbered system-wide).
+fm_backend_tmux_pidns() {
+  local proc_root=${FM_TMUX_PROC_ROOT_OVERRIDE:-${FM_PROC_ROOT_OVERRIDE:-/proc}} ns
+  [ -e "$proc_root/self" ] || [ -L "$proc_root/self" ] || return 0
+  ns=$(readlink "$proc_root/self/ns/pid" 2>/dev/null) || return 1
+  [ -n "$ns" ] || return 1
+  case "$ns" in *[[:space:]]*) return 1 ;; esac
+  printf '%s\n' "$ns"
+}
+
+# fm_backend_tmux_process_start <pid>: the process's kernel start identity.
+# Prints it and returns 0; returns 2 when no process with that pid exists;
+# returns 1 when that could not be established. Only the start time is used,
+# never the process name: tmux renames its server's comm to `tmux: server`
+# (verified, tmux 3.4), and a renamed process must never read as a different
+# one.
+fm_backend_tmux_process_start() {  # <pid>
+  local pid=${1-} proc_root=${FM_TMUX_PROC_ROOT_OVERRIDE:-${FM_PROC_ROOT_OVERRIDE:-/proc}} stat_line starttime out rc=0
+  local -a stat_fields
+  case "$pid" in ''|*[!0-9]*|0) return 1 ;; esac
+  if [ -e "$proc_root/self" ] || [ -L "$proc_root/self" ]; then
+    [ -e "$proc_root/$pid" ] || return 2
+    stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || {
+      # The process may have exited between the two reads.
+      [ -e "$proc_root/$pid" ] || return 2
+      return 1
+    }
+    # After the final comm delimiter, array index 19 is proc stat field 22:
+    # start time in clock ticks since boot.
+    read -r -a stat_fields <<< "${stat_line##*)}"
+    [ "${#stat_fields[@]}" -ge 20 ] || return 1
+    starttime=${stat_fields[19]}
+    case "$starttime" in ''|*[!0-9]*) return 1 ;; esac
+    printf 'starttime=%s\n' "$starttime"
+    return 0
+  fi
+  # No /proc: ps exits 1 with no output for a pid that does not exist. LC_ALL
+  # and TZ are pinned so the rendered start date cannot change with the
+  # reader's locale or zone.
+  out=$(LC_ALL=C TZ=UTC0 ps -p "$pid" -o lstart= 2>/dev/null) || rc=$?
+  out=$(printf '%s' "$out" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  if [ "$rc" -eq 0 ] && [ -n "$out" ]; then
+    case "$out" in *$'\n'*) return 1 ;; esac
+    printf 'lstart=%s\n' "$out"
+    return 0
+  fi
+  [ "$rc" -eq 1 ] && [ -z "$out" ] && return 2
+  return 1
+}
+
+# fm_backend_tmux_endpoint_identity <target>: the identity lines above for the
+# live pane <target> names, ready to append to a task record. Prints nothing
+# and returns 1 when the boot identity is unreadable; the server and pane
+# lines are printed only when every one of them was read, so a record never
+# carries half a server identity.
+fm_backend_tmux_endpoint_identity() {  # <target>
+  local target=${1-} boot pidns ids server_pid pane_id start
+  boot=$(fm_backend_tmux_boot_id) || return 1
+  ids=$(fm_tmux_pane_read "$target" '#{pid} #{pane_id}') || ids=
+  server_pid=${ids%% *}
+  pane_id=${ids#* }
+  printf 'tmux_boot=%s\n' "$boot"
+  pidns=$(fm_backend_tmux_pidns) || return 0
+  case "$server_pid" in ''|*[!0-9]*) return 0 ;; esac
+  case "${pane_id#%}" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$pane_id" != "${pane_id#%}" ] || return 0
+  start=$(fm_backend_tmux_process_start "$server_pid") || return 0
+  [ -z "$pidns" ] || printf 'tmux_pidns=%s\n' "$pidns"
+  printf 'tmux_server_pid=%s\n' "$server_pid"
+  printf 'tmux_server_start=%s\n' "$start"
+  printf 'tmux_pane_id=%s\n' "$pane_id"
+}
+
+# fm_backend_tmux_endpoint_absence_proof <meta>: decide, from the identity a
+# task record carries, whether its agent's pane is provably gone. Call it only after
+# fm_backend_tmux_agent_state read `missing`. Prints "gone\t<proof>" or
+# "unproven\t<reason>" with exactly one TAB; bin/fm-control-lib.sh's
+# fm_control_endpoint_absence_verdict owns how callers act on it.
+fm_backend_tmux_endpoint_absence_proof() {  # <meta>
+  local meta=${1-} rec_boot rec_ns rec_pid rec_start rec_pane boot ns start rc addressed panes
+  rec_boot=$(fm_backend_meta_exact_value "$meta" tmux_boot 2>/dev/null) || rec_boot=
+  if [ -z "$rec_boot" ]; then
+    printf 'unproven\ttmux absence cannot be proven from this task record: it carries no endpoint identity (it predates tmux_boot= recording), and a server-wide window inventory only describes the tmux server this process addresses, so a window absent from it may still be alive on another'
+    return 0
+  fi
+  boot=$(fm_backend_tmux_boot_id) || {
+    printf 'unproven\tthis machine'"'"'s current boot identity could not be read, so a restart since the endpoint was created cannot be proven'
+    return 0
+  }
+  if [ "$boot" != "$rec_boot" ]; then
+    printf 'gone\tthe machine has restarted since the endpoint was created (boot %s, now %s), and no process survives a restart' "$rec_boot" "$boot"
+    return 0
+  fi
+  rec_pid=$(fm_backend_meta_exact_value "$meta" tmux_server_pid 2>/dev/null) || rec_pid=
+  rec_start=$(fm_backend_meta_exact_value "$meta" tmux_server_start 2>/dev/null) || rec_start=
+  rec_pane=$(fm_backend_meta_exact_value "$meta" tmux_pane_id 2>/dev/null) || rec_pane=
+  if [ -z "$rec_pid" ] || [ -z "$rec_start" ] || [ -z "$rec_pane" ]; then
+    printf 'unproven\tthe machine has not restarted since the endpoint was created, and the record carries no tmux server identity to prove the window gone without one'
+    return 0
+  fi
+  rec_ns=$(fm_backend_meta_exact_value "$meta" tmux_pidns 2>/dev/null) || rec_ns=
+  ns=$(fm_backend_tmux_pidns) || ns='<unreadable>'
+  if [ "$ns" != "$rec_ns" ]; then
+    printf 'unproven\tthis process numbers pids in a different namespace (%s) from the one the endpoint was recorded in (%s), so the recorded tmux server pid cannot be checked from here' "${ns:-none}" "${rec_ns:-none}"
+    return 0
+  fi
+  rc=0
+  start=$(fm_backend_tmux_process_start "$rec_pid") || rc=$?
+  case "$rc" in
+    2)
+      printf 'gone\tthe tmux server that held it (pid %s) has exited, and its windows went with it' "$rec_pid"
+      return 0
+      ;;
+    0) ;;
+    *)
+      printf 'unproven\tthe recorded tmux server process (pid %s) could not be read, so whether it still holds the window is unknown' "$rec_pid"
+      return 0
+      ;;
+  esac
+  if [ "$start" != "$rec_start" ]; then
+    printf 'gone\tthe tmux server that held it (pid %s) has exited - that pid now belongs to a process started later - and its windows went with it' "$rec_pid"
+    return 0
+  fi
+  # The recorded server still runs. Its own pane inventory settles the pane
+  # only when it IS the server this process addresses.
+  addressed=$(tmux display-message -p '#{pid}' 2>/dev/null) || addressed=
+  if [ "$addressed" != "$rec_pid" ]; then
+    printf 'unproven\tthe tmux server that held it (pid %s) is still running, but this process addresses %s, so its panes cannot be read from here' "$rec_pid" "${addressed:+a different server (pid $addressed)}${addressed:-no server}"
+    return 0
+  fi
+  panes=$(tmux list-panes -a -F '#{pane_id}' 2>/dev/null) || {
+    printf 'unproven\tthe tmux server that held it (pid %s) is still running, but its pane inventory could not be read' "$rec_pid"
+    return 0
+  }
+  if printf '%s\n' "$panes" | grep -Fqx -- "$rec_pane"; then
+    printf 'unproven\tits pane %s still exists on the tmux server that holds it, but no longer at the recorded address, so an agent may still be running in it' "$rec_pane"
+    return 0
+  fi
+  printf 'gone\tits pane %s was closed on the tmux server that still runs (pid %s)' "$rec_pane" "$rec_pid"
+}

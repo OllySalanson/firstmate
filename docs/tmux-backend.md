@@ -61,6 +61,7 @@ The deeper tmux agent-liveness probe first verifies exact window membership, the
 It classifies recognized Claude, Codex, OpenCode, Pi, pi-signed, Grok, Kimi, Cursor, Muse, Rovo, and AGY process identities as `alive`, common shells as `dead`, an authoritatively absent window as `missing`, unreadable state as `unreadable`, and every other process as `ambiguous`.
 The process-name vocabulary behind those verdicts is owned by `bin/fm-agent-process-lib.sh` and shared with the Herdr adapter, which proves a registered agent against the same names ([herdr-backend.md](herdr-backend.md) "Restart and liveness behavior").
 Only `dead` and `missing` authorize recovery because a false dead result could launch a duplicate agent.
+A `missing` window authorizes re-creating the endpoint only once the identity recorded at spawn proves it gone - after a machine restart, an exited tmux server, or the agent's pane closed on its own server - and [agent-control.md](agent-control.md#reclaiming-a-task-whose-endpoint-is-gone) owns that proof.
 
 For positive attribution, the probe combines two independent name sources rather than making either one load-bearing.
 `#{pane_current_command}` and the pane tty foreground process group's kernel `comm` values expose different name fields, and which one retains executable identity is platform-dependent.
