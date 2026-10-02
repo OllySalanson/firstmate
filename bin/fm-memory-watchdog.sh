@@ -468,7 +468,8 @@ cmd_queue() {
 
 # parse_when <text> <now> [day]: an epoch for a history bound - plain epoch
 # seconds, or anything `date -d` reads. A bare HH:MM falls on the day of the
-# epoch [day] when given, else today, or yesterday when that is later than now.
+# epoch [day] when given, or the next day when not later than [day] (a window
+# crossing midnight); else today, or yesterday when that is later than now.
 parse_when() {
   local text=$1 now=$2 day=${3:-} epoch
   case "$text" in
@@ -482,6 +483,7 @@ parse_when() {
     [0-9]:[0-9][0-9] | [0-9][0-9]:[0-9][0-9])
       if [ -n "$day" ]; then
         epoch=$(date -d "$(date -d "@$day" +%F) $text" +%s 2>/dev/null) || return 1
+        [ "$epoch" -gt "$day" ] || epoch=$(date -d "$(date -d "@$day" +%F) $text 1 day" +%s 2>/dev/null) || return 1
       else
         epoch=$(date -d "$text" +%s 2>/dev/null) || return 1
         [ "$epoch" -le "$now" ] || epoch=$((epoch - 86400))

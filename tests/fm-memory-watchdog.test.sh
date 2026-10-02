@@ -836,6 +836,20 @@ test_history_window_may_run_past_now() {
   pass "a history window that runs past now, such as during a slowdown, ends at now"
 }
 
+test_history_window_may_cross_midnight() {
+  local out now secs zone
+  new_case histmidnight
+  now=$(date +%s)
+  # A zone where it is now about 00:20, just after the window ends.
+  secs=$(((now % 86400 - 1200 + 86400) % 86400))
+  zone="FMT+$((secs / 3600)):$(printf '%02d' $((secs % 3600 / 60)))"
+  printf '%s\tmem=77\tpsi=5.0\n' $((now - 1200)) >"$H/state/watchdog-history"
+  out=$(TZ=$zone wd history --since 23:50 --until 00:10) || fail "a window crossing midnight was refused: $out"
+  assert_contains "$out" "(1 samples" "the window crossing midnight lost its sample"
+  assert_contains "$out" "23:50 to 00:10" "the window crossing midnight was not read as one"
+  pass "a history window from before midnight to after it reads as one window"
+}
+
 test_history_rotates_at_its_size_limit() {
   local i
   new_case rotate
@@ -903,6 +917,7 @@ test_overload_from_elsewhere_reports_once
 test_poll_continues_commands_a_dead_loop_left_paused
 test_history_explains_a_window
 test_history_window_may_run_past_now
+test_history_window_may_cross_midnight
 test_history_rotates_at_its_size_limit
 test_processor_and_connection_config
 echo "# all fm-memory-watchdog tests passed"
