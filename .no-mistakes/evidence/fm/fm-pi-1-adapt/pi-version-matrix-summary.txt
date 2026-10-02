@@ -1,0 +1,13 @@
+Pi extension test matrix (isolated npm --prefix installs, FM_PI_PACKAGE_DIR + tree's pi on PATH, Chromium for export DOM, tsc 7.0.2)
+
+after-pi0.87.1-fm-calm-pi-extension              exit 0, ok=13
+after-pi0.87.1-fm-pi-branch-extension            exit 0, ok=45
+after-pi0.87.1-fm-pi-primary-types               exit 0, ok=1
+after-pi1.0.0-fm-calm-pi-extension               exit 0, ok=13
+after-pi1.0.0-fm-pi-branch-extension             exit 0, ok=45
+after-pi1.0.0-fm-pi-primary-types                exit 0, ok=1
+before-pi1.0.0-fm-calm-pi-extension              exit 1, ok=12
+    not ok - calm mode was not off by default (missing: 'CALM_E2E_OUTPUT')
+before-pi1.0.0-fm-pi-branch-extension            exit 1, ok=0
+    not ok - Pi outcomes rendering consumers must preserve stock behavior: file:///tmp/fm-pi-branch-extension.CYUZLM/stock-render-consumers/[eval1]:71
+before-pi1.0.0-fm-pi-primary-types               exit 0, ok=1

@@ -1,0 +1,54 @@
+--- Pi 0.87.1 | fm_branch_outcomes {"recent":2} | collapsed | firstmate row identical to stock: true
+  |
+  |                                                            
+  | fm_branch_outcomes                                         
+  | OUTCOME_ONE                                                
+  | OUTCOME_TWO                                                
+  |                                                            
+--- Pi 0.87.1 | fm_branch_outcomes {"recent":2} | expanded | firstmate row identical to stock: true
+  |
+  |                                                            
+  | fm_branch_outcomes                                         
+  | OUTCOME_ONE                                                
+  | OUTCOME_TWO                                                
+  |                                                            
+--- Pi 0.87.1 | fm_branch_processed {"through":7} | collapsed | firstmate row identical to stock: true
+  |
+  |                                                            
+  | fm_branch_processed                                        
+  | Processed through 7                                        
+  |                                                            
+--- Pi 0.87.1 | fm_branch_processed {"through":7} | expanded | firstmate row identical to stock: true
+  |
+  |                                                            
+  | fm_branch_processed                                        
+  | Processed through 7                                        
+  |                                                            
+--- Pi 1.0.0 | fm_branch_outcomes {"recent":2} | collapsed | firstmate row identical to stock: true
+  |
+  |                                                            
+  | fm_branch_outcomes recent=2                                
+  | OUTCOME_ONE                                                
+  | OUTCOME_TWO                                                
+  |                                                            
+--- Pi 1.0.0 | fm_branch_outcomes {"recent":2} | expanded | firstmate row identical to stock: true
+  |
+  |                                                            
+  | fm_branch_outcomes                                         
+  |   recent: 2                                                
+  | OUTCOME_ONE                                                
+  | OUTCOME_TWO                                                
+  |                                                            
+--- Pi 1.0.0 | fm_branch_processed {"through":7} | collapsed | firstmate row identical to stock: true
+  |
+  |                                                            
+  | fm_branch_processed through=7                              
+  | Processed through 7                                        
+  |                                                            
+--- Pi 1.0.0 | fm_branch_processed {"through":7} | expanded | firstmate row identical to stock: true
+  |
+  |                                                            
+  | fm_branch_processed                                        
+  |   through: 7                                               
+  | Processed through 7                                        
+  |                                                            
