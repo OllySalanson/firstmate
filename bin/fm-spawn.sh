@@ -1591,7 +1591,7 @@ fi
 # non-spawn-capable backends. The resolved value is
 # recorded in meta only when it is NOT tmux (fm-teardown.sh and fm-watch.sh's
 # window_backend/fm_backend_of_meta already treat an absent backend= as tmux),
-# so the default path's meta stays byte-identical.
+# so a default-path record never carries a backend= line.
 if [ "$RELAUNCH" -eq 0 ]; then
   if [ "$BACKEND_SET" -eq 1 ]; then
     BACKEND=$BACKEND_ARG
@@ -1685,8 +1685,8 @@ if [ "$RELAUNCH" -eq 1 ]; then
   #           pane itself did not survive.
   #   tmux  - no read here can tell "gone" from "on a server I cannot see", so
   #           absence is proven from the endpoint identity the record carries
-  #           instead: a machine restart, an exited tmux server, or a window id
-  #           closed on the recorded server. A record without that identity
+  #           instead: a machine restart, an exited tmux server, or the agent's
+  #           pane id closed on the recorded server. A record without that identity
   #           (written before it existed) still refuses, with the reason stated
   #           rather than guessed past.
   # Every transient or self-contradicting read stays `unreadable`/`ambiguous`
@@ -4605,7 +4605,7 @@ TMUX_ENDPOINT_IDENTITY=
 if [ "$BACKEND" = tmux ]; then
   TMUX_ENDPOINT_IDENTITY=$(fm_backend_tmux_endpoint_identity "$WT_TARGET") || TMUX_ENDPOINT_IDENTITY=
   case "$TMUX_ENDPOINT_IDENTITY" in
-    *tmux_window_id=*) ;;
+    *tmux_pane_id=*) ;;
     *) echo "warning: task $ID's tmux endpoint identity could not be fully recorded, so if its window later disappears a relaunch may not be able to prove it gone" >&2 ;;
   esac
 fi
@@ -4626,7 +4626,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend tmux_boot tmux_pidns tmux_server_pid tmux_server_start tmux_window_id herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend tmux_boot tmux_pidns tmux_server_pid tmux_server_start tmux_pane_id herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -4647,8 +4647,8 @@ preserve_relaunch_meta() {
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
   echo "spawn_gen=$SPAWN_GEN"
   # Default-off writes no traceparent= line.
-  # backend= is written only for a non-default (non-tmux) backend, so the
-  # default path's meta stays byte-identical (absent backend= means tmux;
+  # backend= is written only for a non-default (non-tmux) backend, so a tmux
+  # record never carries a backend= line (absent backend= means tmux;
   # data/fm-backend-design-d7's P1 compatibility contract).
   [ "$BACKEND" = tmux ] || echo "backend=$BACKEND"
   # The endpoint identity that lets a later `missing` be PROVEN gone

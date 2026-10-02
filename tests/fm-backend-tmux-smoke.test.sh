@@ -324,8 +324,9 @@ pass "real tmux: kill removes the window and the readable session inventory auth
 #
 # A `missing` window is reclaimable only when the identity recorded at spawn
 # proves it gone (bin/backends/tmux.sh). These drive that proof against real
-# tmux servers: the window closed, moved, on a server this process does not
-# address, its server exited, and the machine restarted.
+# tmux servers: the window moved, the agent's pane joined into another window,
+# the pane closed, on a server this process does not address, its server
+# exited, and the machine restarted.
 
 point_shim_at() {  # <socket-name>
   cat > "$SHIM_DIR/tmux" <<SH
@@ -349,15 +350,16 @@ fm_backend_tmux_endpoint_identity "$SESSION:$ABS_WINDOW" > "$ABS_META" \
   || fail "the endpoint identity of a live window could not be read"
 SERVER_PID=$(tmux display-message -p '#{pid}')
 ABS_WID=$(tmux list-windows -t "=$SESSION" -F '#{window_name} #{window_id}' | awk -v n="$ABS_WINDOW" '$1 == n { print $2 }')
+ABS_PANE=$(tmux list-panes -t "$ABS_WID" -F '#{pane_id}')
 [ "$(fm_backend_meta_exact_value "$ABS_META" tmux_server_pid)" = "$SERVER_PID" ] \
   || fail "the recorded server pid is not the live server's: $(cat "$ABS_META")"
-[ "$(fm_backend_meta_exact_value "$ABS_META" tmux_window_id)" = "$ABS_WID" ] \
-  || fail "the recorded window id is not the live window's: $(cat "$ABS_META")"
+[ "$(fm_backend_meta_exact_value "$ABS_META" tmux_pane_id)" = "$ABS_PANE" ] \
+  || fail "the recorded pane id is not the live pane's: $(cat "$ABS_META")"
 fm_backend_meta_exact_value "$ABS_META" tmux_boot >/dev/null \
   || fail "the recorded identity carries no boot: $(cat "$ABS_META")"
 fm_backend_meta_exact_value "$ABS_META" tmux_server_start >/dev/null \
   || fail "the recorded identity carries no server start: $(cat "$ABS_META")"
-pass "real tmux: a live window's endpoint identity names its boot, its server process, and its window id"
+pass "real tmux: a live window's endpoint identity names its boot, its server process, and its pane id"
 
 tmux rename-window -t "$ABS_WID" "$ABS_WINDOW-moved" || fail "could not rename the recorded window"
 [ "$(fm_backend_agent_state tmux "$SESSION:$ABS_WINDOW")" = missing ] \
@@ -369,13 +371,29 @@ case "$proof" in
 esac
 pass "real tmux: a window that moved on its server is never proven gone"
 
-tmux kill-window -t "$ABS_WID" || fail "could not close the recorded window"
+# The captain joins the agent's pane beside another window to watch it: its
+# original single-pane window is destroyed, but the agent keeps running.
+HOST_WID=$(tmux new-window -dP -F '#{window_id}' -t "=$SESSION:" -n fm-absence-host) \
+  || fail "could not create the window the agent's pane is joined into"
+tmux join-pane -d -s "$ABS_PANE" -t "$HOST_WID" || fail "could not join the agent's pane into another window"
+tmux list-windows -a -F '#{window_id}' | grep -Fqx -- "$ABS_WID" \
+  && fail "joining the only pane out of the recorded window should have destroyed that window"
+[ "$(fm_backend_agent_state tmux "$SESSION:$ABS_WINDOW")" = missing ] \
+  || fail "a window whose pane was joined away should read missing at its recorded address"
 proof=$(absence_proof "$ABS_META")
 case "$proof" in
-  "gone "*"was closed on the tmux server that still runs"*) ;;
-  *) fail "a window closed on its still-running server should be proven gone: $proof" ;;
+  "unproven "*"pane $ABS_PANE still exists on the tmux server"*) ;;
+  *) fail "an agent pane joined into another window must not be proven gone: $proof" ;;
 esac
-pass "real tmux: a window closed on its running server is proven gone"
+pass "real tmux: an agent pane joined into another window is never proven gone"
+
+tmux kill-pane -t "$ABS_PANE" || fail "could not close the recorded pane"
+proof=$(absence_proof "$ABS_META")
+case "$proof" in
+  "gone "*"pane $ABS_PANE was closed on the tmux server that still runs"*) ;;
+  *) fail "a pane closed on its still-running server should be proven gone: $proof" ;;
+esac
+pass "real tmux: a pane closed on its running server is proven gone"
 
 # A window on a second server, judged from a process that addresses the first.
 "$REAL_TMUX" -L "$SOCKET-other" -f /dev/null new-session -d -s other -x 200 -y 50 \

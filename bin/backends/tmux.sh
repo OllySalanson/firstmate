@@ -459,10 +459,12 @@ fm_backend_tmux_agent_alive() {  # <target>
 #                       and namespace a pid plus its start identity names one
 #                       process, so its absence proves the server - and every
 #                       window it held - is gone.
-#   tmux_window_id=     the server-unique `@N` id of the window. While the
-#                       recorded server still runs and IS the server this
-#                       process addresses, that id missing from its complete
-#                       inventory proves the window itself was closed.
+#   tmux_pane_id=       the server-unique `%N` id of the agent's pane. It
+#                       survives renames and join-pane, move-pane, and
+#                       break-pane, so while the recorded server still runs and
+#                       IS the server this process addresses, that id missing
+#                       from its complete pane inventory proves the agent's
+#                       pane itself was closed.
 #
 # Wall-clock comparisons (boot time against spawn time) are deliberately not
 # used: WSL2's clock is observed to step after host sleep, and a stepped clock
@@ -538,35 +540,35 @@ fm_backend_tmux_process_start() {  # <pid>
 }
 
 # fm_backend_tmux_endpoint_identity <target>: the identity lines above for the
-# live window <target> names, ready to append to a task record. Prints nothing
-# and returns 1 when the boot identity is unreadable; the server and window
+# live pane <target> names, ready to append to a task record. Prints nothing
+# and returns 1 when the boot identity is unreadable; the server and pane
 # lines are printed only when every one of them was read, so a record never
 # carries half a server identity.
 fm_backend_tmux_endpoint_identity() {  # <target>
-  local target=${1-} boot pidns ids server_pid window_id start
+  local target=${1-} boot pidns ids server_pid pane_id start
   boot=$(fm_backend_tmux_boot_id) || return 1
-  ids=$(fm_tmux_pane_read "$target" '#{pid} #{window_id}') || ids=
+  ids=$(fm_tmux_pane_read "$target" '#{pid} #{pane_id}') || ids=
   server_pid=${ids%% *}
-  window_id=${ids#* }
+  pane_id=${ids#* }
   printf 'tmux_boot=%s\n' "$boot"
   pidns=$(fm_backend_tmux_pidns) || return 0
   case "$server_pid" in ''|*[!0-9]*) return 0 ;; esac
-  case "${window_id#@}" in ''|*[!0-9]*) return 0 ;; esac
-  [ "$window_id" != "${window_id#@}" ] || return 0
+  case "${pane_id#%}" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$pane_id" != "${pane_id#%}" ] || return 0
   start=$(fm_backend_tmux_process_start "$server_pid") || return 0
   [ -z "$pidns" ] || printf 'tmux_pidns=%s\n' "$pidns"
   printf 'tmux_server_pid=%s\n' "$server_pid"
   printf 'tmux_server_start=%s\n' "$start"
-  printf 'tmux_window_id=%s\n' "$window_id"
+  printf 'tmux_pane_id=%s\n' "$pane_id"
 }
 
 # fm_backend_tmux_endpoint_absence_proof <meta>: decide, from the identity a
-# task record carries, whether its window is provably gone. Call it only after
+# task record carries, whether its agent's pane is provably gone. Call it only after
 # fm_backend_tmux_agent_state read `missing`. Prints "gone\t<proof>" or
 # "unproven\t<reason>" with exactly one TAB; bin/fm-control-lib.sh's
 # fm_control_endpoint_absence_verdict owns how callers act on it.
 fm_backend_tmux_endpoint_absence_proof() {  # <meta>
-  local meta=${1-} rec_boot rec_ns rec_pid rec_start rec_wid boot ns start rc addressed windows
+  local meta=${1-} rec_boot rec_ns rec_pid rec_start rec_pane boot ns start rc addressed panes
   rec_boot=$(fm_backend_meta_exact_value "$meta" tmux_boot 2>/dev/null) || rec_boot=
   if [ -z "$rec_boot" ]; then
     printf 'unproven\ttmux absence cannot be proven from this task record: it carries no endpoint identity (it predates tmux_boot= recording), and a server-wide window inventory only describes the tmux server this process addresses, so a window absent from it may still be alive on another'
@@ -582,8 +584,8 @@ fm_backend_tmux_endpoint_absence_proof() {  # <meta>
   fi
   rec_pid=$(fm_backend_meta_exact_value "$meta" tmux_server_pid 2>/dev/null) || rec_pid=
   rec_start=$(fm_backend_meta_exact_value "$meta" tmux_server_start 2>/dev/null) || rec_start=
-  rec_wid=$(fm_backend_meta_exact_value "$meta" tmux_window_id 2>/dev/null) || rec_wid=
-  if [ -z "$rec_pid" ] || [ -z "$rec_start" ] || [ -z "$rec_wid" ]; then
+  rec_pane=$(fm_backend_meta_exact_value "$meta" tmux_pane_id 2>/dev/null) || rec_pane=
+  if [ -z "$rec_pid" ] || [ -z "$rec_start" ] || [ -z "$rec_pane" ]; then
     printf 'unproven\tthe machine has not restarted since the endpoint was created, and the record carries no tmux server identity to prove the window gone without one'
     return 0
   fi
@@ -610,20 +612,20 @@ fm_backend_tmux_endpoint_absence_proof() {  # <meta>
     printf 'gone\tthe tmux server that held it (pid %s) has exited - that pid now belongs to a process started later - and its windows went with it' "$rec_pid"
     return 0
   fi
-  # The recorded server still runs. Its own inventory settles the window only
-  # when it IS the server this process addresses.
+  # The recorded server still runs. Its own pane inventory settles the pane
+  # only when it IS the server this process addresses.
   addressed=$(tmux display-message -p '#{pid}' 2>/dev/null) || addressed=
   if [ "$addressed" != "$rec_pid" ]; then
-    printf 'unproven\tthe tmux server that held it (pid %s) is still running, but this process addresses %s, so its windows cannot be read from here' "$rec_pid" "${addressed:+a different server (pid $addressed)}${addressed:-no server}"
+    printf 'unproven\tthe tmux server that held it (pid %s) is still running, but this process addresses %s, so its panes cannot be read from here' "$rec_pid" "${addressed:+a different server (pid $addressed)}${addressed:-no server}"
     return 0
   fi
-  windows=$(tmux list-windows -a -F '#{window_id}' 2>/dev/null) || {
-    printf 'unproven\tthe tmux server that held it (pid %s) is still running, but its window inventory could not be read' "$rec_pid"
+  panes=$(tmux list-panes -a -F '#{pane_id}' 2>/dev/null) || {
+    printf 'unproven\tthe tmux server that held it (pid %s) is still running, but its pane inventory could not be read' "$rec_pid"
     return 0
   }
-  if printf '%s\n' "$windows" | grep -Fqx -- "$rec_wid"; then
-    printf 'unproven\tits window %s still exists on the tmux server that holds it, but no longer at the recorded address, so an agent may still be running in it' "$rec_wid"
+  if printf '%s\n' "$panes" | grep -Fqx -- "$rec_pane"; then
+    printf 'unproven\tits pane %s still exists on the tmux server that holds it, but no longer at the recorded address, so an agent may still be running in it' "$rec_pane"
     return 0
   fi
-  printf 'gone\tits window %s was closed on the tmux server that still runs (pid %s)' "$rec_wid" "$rec_pid"
+  printf 'gone\tits pane %s was closed on the tmux server that still runs (pid %s)' "$rec_pane" "$rec_pid"
 }

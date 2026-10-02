@@ -43,7 +43,7 @@
 #              is merely unreachable from this seat. HERDR proves it by
 #              re-reading the session the record names; TMUX proves it from the
 #              endpoint identity the record carries (a machine restart, an
-#              exited server, or a window closed on its own server). Proven
+#              exited server, or the agent's pane closed on its own server). Proven
 #              gone reports `endpoint-gone` rather than `already-stopped`,
 #              because the endpoint this verb normally preserves did not
 #              survive; a pane that turns out to be there and idle is the

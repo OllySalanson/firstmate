@@ -432,16 +432,17 @@ tests/fm-control-relaunch.test.sh
 ```
 
 ```text
-ok - real tmux: a live window's endpoint identity names its boot, its server process, and its window id
+ok - real tmux: a live window's endpoint identity names its boot, its server process, and its pane id
 ok - real tmux: a window that moved on its server is never proven gone
-ok - real tmux: a window closed on its running server is proven gone
+ok - real tmux: an agent pane joined into another window is never proven gone
+ok - real tmux: a pane closed on its running server is proven gone
 ok - real tmux: a window on a running server this process does not address is never proven gone
 ok - real tmux: a window whose server process exited is proven gone
 ok - real tmux: a window recorded in a previous boot is proven gone
 ok - tmux: after a machine restart, relaunch reclaims a task whose window is gone without a hand-made window
 ```
 
-The tmux facts the proof rests on, observed there: `display-message -p '#{pid}'` with no client and no target answers the pid of the server the calling process addresses; a window keeps its `#{window_id}` through a rename, so a renamed window is still found in `list-windows -a -F '#{window_id}'`; and tmux renames its server's kernel `comm` to `tmux: server`, so the start time is parsed from after the final `)` of `/proc/<pid>/stat` and the process name is never part of the server's identity.
+The tmux facts the proof rests on, observed there: `display-message -p '#{pid}'` with no client and no target answers the pid of the server the calling process addresses; a pane keeps its `#{pane_id}` through a window rename and through `join-pane`, so a renamed window's pane, or a pane joined into another window, is still found in `list-panes -a -F '#{pane_id}'`; and tmux renames its server's kernel `comm` to `tmux: server`, so the start time is parsed from after the final `)` of `/proc/<pid>/stat` and the process name is never part of the server's identity.
 The restart case is the one that motivated the proof, and it is non-vacuous: the same relaunch test run against the previous code fails with that code's refusal, `tmux absence cannot be proven from a task record`.
 
 ## Claude workspace trust

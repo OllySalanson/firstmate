@@ -56,7 +56,13 @@ make_tmux_stub() {  # <dir>
   cat > "$fb/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
-[ "${1:-}" != list-panes ] || exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
+if [ "${1:-}" = list-panes ]; then
+  # A server-wide pane-id inventory: the panes the addressed server holds.
+  case " $* " in
+    *' -a '*'#{pane_id}'*) cat "$FM_FAKE_DIR/pane-ids" 2>/dev/null; exit 0 ;;
+  esac
+  exec "$FM_TEST_FAKE_TMUX_LIST_PANES" "$0" "$@"
+fi
 D=$FM_FAKE_DIR
 case "${1:-}" in
   send-keys)
@@ -105,7 +111,7 @@ case "${1:-}" in
       case "$a" in
         # The endpoint identity a spawn records, and the server this process
         # addresses (bin/backends/tmux.sh's endpoint-identity helpers).
-        '#{pid} #{window_id}') printf '%s %s\n' "$(cat "$D/server-pid")" "$(cat "$D/window-id")"; exit 0 ;;
+        '#{pid} #{pane_id}') printf '%s %s\n' "$(cat "$D/server-pid")" "$(cat "$D/pane-id")"; exit 0 ;;
         '#{pid}')
           [ -s "$D/addressed-pid" ] || exit 1
           cat "$D/addressed-pid"; exit 0 ;;
@@ -129,10 +135,6 @@ case "${1:-}" in
     fi
     exit 0 ;;
   list-windows)
-    # A server-wide window-id inventory: the windows the addressed server holds.
-    case " $* " in
-      *' -a '*'#{window_id}'*) cat "$D/window-ids" 2>/dev/null; exit 0 ;;
-    esac
     # The three shapes real tmux answers a per-session inventory with. The
     # first two are DEFINITIVE and classify `missing`; the third is not and
     # classifies `unreadable`.
@@ -213,12 +215,12 @@ new_case() {
   printf 'claude' > "$dir/fake/becomes"
   printf '%s\n' "fm-$id" > "$dir/fake/windows"
   printf '%s' fmses > "$dir/fake/session-name"
-  # The live tmux server (pid 4242) and the window id it hands a new window,
-  # in a staged /proc for the current boot.
+  # The live tmux server (pid 4242) and the pane id it hands a new window's
+  # agent, in a staged /proc for the current boot.
   printf '4242' > "$dir/fake/server-pid"
   printf '4242' > "$dir/fake/addressed-pid"
-  printf '@9' > "$dir/fake/window-id"
-  printf '@9\n' > "$dir/fake/window-ids"
+  printf '%%9' > "$dir/fake/pane-id"
+  printf '%%9\n' > "$dir/fake/pane-ids"
   stage_proc "$dir" boot-now 'pid:[4026531836]'
   stage_proc_pid "$dir" 4242 500
   make_tmux_stub "$dir"
@@ -245,14 +247,14 @@ stage_proc_pid() {  # <case-dir> <pid> [starttime]
     "$2" "$2" "$2" "$3" > "$1/proc/$2/stat"
 }
 
-# record_tmux_identity <case-dir> <id> <boot> [server-pid start window-id [pidns]]:
+# record_tmux_identity <case-dir> <id> <boot> [server-pid start pane-id [pidns]]:
 # the endpoint identity fm-spawn records, as of the window's creation.
 record_tmux_identity() {
   local meta="$1/home/state/$2.meta"
   printf 'tmux_boot=%s\n' "$3" >> "$meta"
   [ -n "${4:-}" ] || return 0
   printf 'tmux_pidns=%s\n' "${7:-pid:[4026531836]}" >> "$meta"
-  printf 'tmux_server_pid=%s\ntmux_server_start=starttime=%s\ntmux_window_id=%s\n' "$4" "$5" "$6" >> "$meta"
+  printf 'tmux_server_pid=%s\ntmux_server_start=starttime=%s\ntmux_pane_id=%s\n' "$4" "$5" "$6" >> "$meta"
 }
 
 # add_ship_task <case-dir> <id> [harness] [session]
@@ -2008,8 +2010,8 @@ test_tmux_refuses_when_the_server_is_gone() {
 # The reboot that motivated this: every tmux-backed worker's window reads
 # `missing` afterwards, and relaunch refused each one because a bare `missing`
 # cannot tell "destroyed" from "on a server I cannot see". The record now
-# carries the kernel boot, tmux server process, and window id the window was
-# created with, so these states prove it gone and the owning seat reclaims it
+# carries the kernel boot, tmux server process, and agent pane id the window
+# was created with, so these states prove it gone and the owning seat reclaims it
 # with no hand-made window.
 
 # assert_tmux_reclaimed <case-dir> <id> <proof-fragment> <what>
@@ -2035,8 +2037,8 @@ assert_tmux_reclaimed() {
     || fail "the reclaim must keep the recorded worktree ($what)"
   [ "$(meta_field "$dir" "$id" tmux_boot)" = boot-now ] \
     || fail "the rebound record should carry the current boot ($what)"
-  [ "$(meta_field "$dir" "$id" tmux_window_id)" = @9 ] \
-    || fail "the rebound record should carry the new window's id ($what)"
+  [ "$(meta_field "$dir" "$id" tmux_pane_id)" = %9 ] \
+    || fail "the rebound record should carry the new pane's id ($what)"
   [ "$(meta_field "$dir" "$id" tmux_server_pid)" = 4343 ] \
     || fail "the rebound record should carry the new window's server ($what)"
   [ "$(grep -c '^tmux_boot=' "$dir/home/state/$id.meta")" = 1 ] \
@@ -2052,7 +2054,7 @@ test_tmux_reclaims_every_window_after_a_machine_restart() {
   local dir
   dir=$(new_case tmux-reboot rl64)
   add_ship_task "$dir" rl64 claude
-  record_tmux_identity "$dir" rl64 boot-before 4242 500 @3
+  record_tmux_identity "$dir" rl64 boot-before 4242 500 %3
   # After the restart there is no server at all, and the recorded pid now
   # names some other process - neither matters once the boot differs.
   : > "$dir/fake/server-dead"
@@ -2067,7 +2069,7 @@ test_tmux_reclaims_a_window_whose_server_exited() {
   local dir
   dir=$(new_case tmux-serverexit rl65)
   add_ship_task "$dir" rl65 claude
-  record_tmux_identity "$dir" rl65 boot-now 4242 500 @3
+  record_tmux_identity "$dir" rl65 boot-now 4242 500 %3
   stage_proc_pid "$dir" 4242
   : > "$dir/fake/server-dead"
   printf '' > "$dir/fake/addressed-pid"
@@ -2079,7 +2081,7 @@ test_tmux_reclaims_a_window_whose_server_pid_was_reused() {
   local dir
   dir=$(new_case tmux-pidreuse rl66)
   add_ship_task "$dir" rl66 claude
-  record_tmux_identity "$dir" rl66 boot-now 4242 500 @3
+  record_tmux_identity "$dir" rl66 boot-now 4242 500 %3
   # The same pid, started later: a different process holds that number now.
   stage_proc_pid "$dir" 4242 900
   : > "$dir/fake/session-missing"
@@ -2091,25 +2093,25 @@ test_tmux_reclaims_a_window_closed_on_its_running_server() {
   local dir
   dir=$(new_case tmux-closed rl67)
   add_ship_task "$dir" rl67 claude
-  record_tmux_identity "$dir" rl67 boot-now 4242 500 @3
+  record_tmux_identity "$dir" rl67 boot-now 4242 500 %3
   strand_endpoint "$dir" rl67
   # The recorded server still runs, IS the one this process addresses, and no
-  # longer holds window @3 anywhere.
-  printf '@1\n@2\n' > "$dir/fake/window-ids"
-  assert_tmux_reclaimed "$dir" rl67 "its window @3 was closed on the tmux server that still runs" "window closed"
-  pass "tmux: a window id missing from its own running server's inventory is proven gone"
+  # longer holds pane %3 anywhere.
+  printf '%%1\n%%2\n' > "$dir/fake/pane-ids"
+  assert_tmux_reclaimed "$dir" rl67 "its pane %3 was closed on the tmux server that still runs" "pane closed"
+  pass "tmux: a pane id missing from its own running server's inventory is proven gone"
 }
 
 test_tmux_refuses_a_window_that_only_moved_on_its_server() {
   local dir out rc
   dir=$(new_case tmux-moved rl68)
   add_ship_task "$dir" rl68 claude
-  record_tmux_identity "$dir" rl68 boot-now 4242 500 @3
+  record_tmux_identity "$dir" rl68 boot-now 4242 500 %3
   strand_endpoint "$dir" rl68
-  # Renamed or moved: the window id is still on the server, so an agent may
-  # still be running in it.
-  printf '@1\n@3\n' > "$dir/fake/window-ids"
-  assert_tmux_missing_refuses "$dir" rl68 "window id still on its server"
+  # Renamed, moved, or its pane joined into another window: the agent's pane
+  # id is still on the server, so an agent may still be running in it.
+  printf '%%1\n%%3\n' > "$dir/fake/pane-ids"
+  assert_tmux_missing_refuses "$dir" rl68 "pane id still on its server"
   out=$(run_spawn "$dir" rl68 --relaunch --harness claude); rc=$?
   expect_code 1 "$rc" "a moved window must refuse"
   assert_contains "$out" "still exists on the tmux server that holds it" "the refusal should say the window survives"
@@ -2120,12 +2122,12 @@ test_tmux_refuses_when_its_running_server_is_not_the_addressed_one() {
   local dir out rc
   dir=$(new_case tmux-otherserver rl69)
   add_ship_task "$dir" rl69 claude
-  record_tmux_identity "$dir" rl69 boot-now 4242 500 @3
+  record_tmux_identity "$dir" rl69 boot-now 4242 500 %3
   : > "$dir/fake/session-missing"
   # The recorded server is alive, but this process talks to another one, whose
   # inventory says nothing about the recorded window.
   printf '5151' > "$dir/fake/addressed-pid"
-  printf '' > "$dir/fake/window-ids"
+  printf '' > "$dir/fake/pane-ids"
   assert_tmux_missing_refuses "$dir" rl69 "recorded server alive on another socket"
   out=$(run_spawn "$dir" rl69 --relaunch --harness claude); rc=$?
   expect_code 1 "$rc" "an unaddressed live server must refuse"
@@ -2137,7 +2139,7 @@ test_tmux_refuses_a_server_pid_read_from_another_namespace() {
   local dir out rc
   dir=$(new_case tmux-pidns rl70)
   add_ship_task "$dir" rl70 claude
-  record_tmux_identity "$dir" rl70 boot-now 4242 500 @3 'pid:[4026532000]'
+  record_tmux_identity "$dir" rl70 boot-now 4242 500 %3 'pid:[4026532000]'
   stage_proc_pid "$dir" 4242
   : > "$dir/fake/server-dead"
   assert_tmux_missing_refuses "$dir" rl70 "different pid namespace"
@@ -2175,15 +2177,15 @@ test_tmux_relaunch_records_the_adopted_window_identity() {
   local dir out rc=0
   dir=$(new_case tmux-adopt-identity rl73)
   add_ship_task "$dir" rl73 claude
-  record_tmux_identity "$dir" rl73 boot-before 1111 7 @1
-  printf '@5' > "$dir/fake/window-id"
+  record_tmux_identity "$dir" rl73 boot-before 1111 7 %1
+  printf '%%5' > "$dir/fake/pane-id"
   out=$(run_control "$dir" rl73 relaunch --note "same window, fresh identity") || rc=$?
   expect_code 0 "$rc" "an ordinary relaunch should succeed"$'\n'"$out"
   [ "$(meta_field "$dir" rl73 window)" = "fmses:fm-rl73" ] || fail "an ordinary relaunch keeps its endpoint"
   [ "$(meta_field "$dir" rl73 tmux_boot)" = boot-now ] || fail "the record should carry the current boot"
   [ "$(meta_field "$dir" rl73 tmux_server_pid)" = 4242 ] || fail "the record should carry the live server pid"
   [ "$(meta_field "$dir" rl73 tmux_server_start)" = starttime=500 ] || fail "the record should carry the server start"
-  [ "$(meta_field "$dir" rl73 tmux_window_id)" = @5 ] || fail "the record should carry the adopted window's id"
+  [ "$(meta_field "$dir" rl73 tmux_pane_id)" = %5 ] || fail "the record should carry the adopted window's pane id"
   [ "$(grep -c '^tmux_' "$dir/home/state/rl73.meta")" = 5 ] \
     || fail "the previous incarnation's identity must be replaced, not appended to"
   pass "tmux: a relaunch replaces the record's endpoint identity with the live window's"
@@ -2193,7 +2195,7 @@ test_tmux_reclaim_abort_closes_its_unpublished_window() {
   local dir out rc real_mv meta
   dir=$(new_case tmux-reclaim-abort rl74)
   add_ship_task "$dir" rl74 claude
-  record_tmux_identity "$dir" rl74 boot-before 4242 500 @3
+  record_tmux_identity "$dir" rl74 boot-before 4242 500 %3
   : > "$dir/fake/server-dead"
   meta="$dir/home/state/rl74.meta"
   real_mv=$(command -v mv)

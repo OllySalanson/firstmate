@@ -297,10 +297,10 @@ fm_control_backend_state_verified() {  # <backend>
 #     CURRENT process addresses, so a different but running server would answer
 #     "not anywhere" about a window it was never able to see. It proves absence
 #     instead from the endpoint identity the record carries - the kernel boot,
-#     the tmux server process, and the window id it was created with - which
-#     bin/backends/tmux.sh's fm_backend_tmux_endpoint_absence_proof owns: a
-#     different boot, an exited server, or a window id missing from the
-#     recorded server's own inventory is `gone`; anything less, including every
+#     the tmux server process, and the agent's pane id it was created with -
+#     which bin/backends/tmux.sh's fm_backend_tmux_endpoint_absence_proof owns:
+#     a different boot, an exited server, or a pane id missing from the
+#     recorded server's own pane inventory is `gone`; anything less, including every
 #     record written before that identity existed, stays `unproven`.
 #
 # Both control-plane callers share this one implementation so the proof cannot
