@@ -2501,7 +2501,7 @@ EOF
   seed_backlog "$dir" rl46 in_flight
   hold_backlog "$dir" rl46 captain
 
-  out=$(run_spawn "$dir" rl46 "$dir/proj" --mode no-mistakes --yolo off) || rc=$?
+  out=$(run_spawn "$dir" rl46 "$dir/proj" --harness claude --mode no-mistakes --yolo off) || rc=$?
   [ "$rc" -ne 0 ] || fail "a fresh spawn of an item held for the captain was accepted"$'\n'"$out"
   assert_contains "$out" "not dispatchable in state in_flight yes no" "a fresh spawn must refuse at the backlog preflight"
   [ ! -e "$dir/home/state/rl46.meta" ] || fail "a refused fresh spawn published a task record"
