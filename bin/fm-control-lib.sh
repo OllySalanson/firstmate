@@ -265,14 +265,15 @@ fm_control_backend_state_verified() {  # <backend>
 
 # fm_control_endpoint_absence_verdict: the ONE owner of the per-backend proof
 # that an endpoint reading `missing` is actually GONE rather than merely
-# unreachable from this seat. Call it only for a `missing` raw state.
+# unreachable from this seat. Call it only for a `missing` raw state, with the
+# task's record as <meta>.
 #
 # Prints "<verdict>\t<reason>" - always exactly one TAB, so a caller splits
-# unambiguously with ${raw%%$'\t'*} and ${raw#*$'\t'}. The reason is empty
-# except on `unproven`, where it is the concrete sentence the caller's refusal
-# message embeds. It is returned on stdout rather than set in a variable
-# because every caller reads this through a command substitution, where an
-# assignment made here could never reach them.
+# unambiguously with ${raw%%$'\t'*} and ${raw#*$'\t'}. On `unproven` the reason
+# is the concrete sentence the caller's refusal message embeds; on tmux's
+# `gone` it names the proof; otherwise it is empty. It is returned on stdout
+# rather than set in a variable because every caller reads this through a
+# command substitution, where an assignment made here could never reach them.
 #
 # The verdicts:
 #   gone     - absence is PROVEN. There is no endpoint and therefore no agent.
@@ -287,29 +288,34 @@ fm_control_backend_state_verified() {  # <backend>
 # re-creating the endpoint - must come through here rather than trusting the
 # raw verdict.
 #
-# Whether absence is provable AT ALL is a property of the backend, not of the
-# reading:
-#   herdr CAN prove it. Every read goes through fm_backend_herdr_cli, which
-#     passes `--session <session>`, so the recheck starts and reads the session
-#     the RECORD names, through that session's own socket. The answer is about
-#     the task's endpoint and nothing else.
-#   tmux CANNOT. `list-windows -a` describes only the server the CURRENT
-#     process addresses (its TMUX_TMPDIR/socket), and a task's record does not
-#     carry the endpoint's socket identity - so a different but running server
-#     would answer "not anywhere" about a window it was never able to see.
-#     There is no read available here that closes that gap, so tmux always
-#     returns `unproven` and both verbs refuse. tmux is left exactly as
-#     deadlocked as it was before this change - no worse - but deliberately.
+# How absence is proven is a property of the backend, not of the reading:
+#   herdr re-reads the recorded pane. Every read goes through
+#     fm_backend_herdr_cli, which passes `--session <session>`, so the recheck
+#     starts and reads the session the RECORD names, through that session's own
+#     socket. The answer is about the task's endpoint and nothing else.
+#   tmux cannot re-read: `list-windows -a` describes only the server the
+#     CURRENT process addresses, so a different but running server would answer
+#     "not anywhere" about a window it was never able to see. It proves absence
+#     instead from the endpoint identity the record carries - the kernel boot,
+#     the tmux server process, and the window id it was created with - which
+#     bin/backends/tmux.sh's fm_backend_tmux_endpoint_absence_proof owns: a
+#     different boot, an exited server, or a window id missing from the
+#     recorded server's own inventory is `gone`; anything less, including every
+#     record written before that identity existed, stays `unproven`.
 #
 # Both control-plane callers share this one implementation so the proof cannot
 # drift into two answers for the same endpoint.
-fm_control_endpoint_absence_verdict() {  # <backend> <target>
-  local backend=${1-} target=${2-}
+fm_control_endpoint_absence_verdict() {  # <backend> <target> <meta>
+  local backend=${1-} target=${2-} meta=${3-} proof
   fm_backend_source "$backend" \
     || { printf 'unproven\tbackend %s could not be loaded to prove anything about that endpoint' "'$backend'"; return 0; }
   case "$backend" in
     tmux)
-      printf 'unproven\ttmux absence cannot be proven from a task record: the record does not carry the endpoint'"'"'s socket identity, and a server-wide window inventory only describes the tmux server this process addresses, so a window absent from it may still be alive on another'
+      proof=$(fm_backend_tmux_endpoint_absence_proof "$meta") || proof=
+      case "$proof" in
+        gone$'\t'*|unproven$'\t'*) printf '%s' "$proof" ;;
+        *) printf 'unproven\tthe tmux endpoint identity in the task record could not be evaluated' ;;
+      esac
       ;;
     herdr)
       # Start the RECORDED session's server (only the server - nothing is
