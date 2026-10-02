@@ -1,0 +1,18 @@
+### 1. PR armed (bin/fm-pr-check.sh shape): state/rl70.meta tail
+effort=default
+pr=https://github.com/example/repo/pull/70
+pr_head=0123456789abcdef0123456789abcdef01234567
+  state/rl70.check.sh
+  state/rl70.pr-poll
+  state/rl70.pr-poll-registration
+
+### 2. $ bin/fm-control.sh rl70 relaunch --note 'continuing after review'
+exit=0
+state/rl70.meta tail after republish:
+pr=https://github.com/example/repo/pull/70
+pr_head=0123456789abcdef0123456789abcdef01234567
+control_relaunch_tx=2917154.20261001T235650Z.29562
+
+### 3. $ bin/fm-watch.sh  (one slow-check sweep; fake gh reports the PR MERGED)
+watcher exit=0; watcher wake output:
+  check: /tmp/fm-control-relaunch.UqblSJ/e2e-watch-3059/home/state/rl70.check.sh: merged
