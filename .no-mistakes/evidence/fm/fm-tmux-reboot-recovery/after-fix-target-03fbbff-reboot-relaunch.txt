@@ -1,0 +1,27 @@
+### task record before the reboot (tmux_* = identity recorded at spawn)
+window=fmses:fm-rl64
+worktree=/tmp/fm-control-relaunch.KnHNfR/tmux-reboot-22095/wt
+harness=claude
+tmux_boot=boot-before
+tmux_pidns=pid:[4026531836]
+tmux_server_pid=4242
+tmux_server_start=starttime=500
+tmux_pane_id=%3
+### the machine reboots: boot id is now 'boot-now', no tmux server exists
+$ bin/fm-control.sh rl64 relaunch --note "the machine went down; pick the work back up"
+note: task rl64's recorded endpoint fmses:fm-rl64 is gone: the machine has restarted since the endpoint was created (boot boot-before, now boot-now), and no process survives a restart; re-creating it in the recorded worktree
+warning: /tmp/fm-control-relaunch.KnHNfR/tmux-reboot-22095/home/data/rl64/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+no server running on /tmp/tmux-1000/default
+relaunched rl64 harness=claude from=claude model=default effort=default backend=tmux endpoint=firstmate:fm-rl64 worktree=/tmp/fm-control-relaunch.KnHNfR/tmux-reboot-22095/wt
+[exit code 0]
+### task record after relaunch
+window=firstmate:fm-rl64
+worktree=/tmp/fm-control-relaunch.KnHNfR/tmux-reboot-22095/wt
+harness=claude
+tmux_boot=boot-now
+tmux_pidns=pid:[4026531836]
+tmux_server_pid=4343
+tmux_server_start=starttime=600
+tmux_pane_id=%9
+### windows created by relaunch:
+fm-rl64

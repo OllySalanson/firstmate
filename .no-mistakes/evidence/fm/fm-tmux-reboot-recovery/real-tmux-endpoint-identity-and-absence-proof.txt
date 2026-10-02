@@ -1,0 +1,17 @@
+$ tmux new-session -d -s captain; fm_backend_tmux_create_task captain fm-demo1 $HOME
+### endpoint identity recorded at spawn (real tmux 3.4):
+tmux_boot=ab627d75-7d7d-40d8-b449-888ed4599e96
+tmux_pidns=pid:[4026532219]
+tmux_server_pid=18021
+tmux_server_start=starttime=5086840
+tmux_pane_id=%1
+### window alive -> absence proof:
+unproven	its pane %1 still exists on the tmux server that holds it, but no longer at the recorded address, so an agent may still be running in it
+$ tmux kill-server   # every worker window is lost, as in the 1 Oct reboot
+### agent state now: missing
+### absence proof (same boot, server exited):
+gone	the tmux server that held it (pid 18021) has exited, and its windows went with it
+### absence proof after a reboot (boot_id changed, staged via FM_TMUX_PROC_ROOT_OVERRIDE):
+gone	the machine has restarted since the endpoint was created (boot ab627d75-7d7d-40d8-b449-888ed4599e96, now 11111111-2222-3333-4444-555555555555), and no process survives a restart
+### a legacy record with no identity still refuses:
+unproven	tmux absence cannot be proven from this task record: it carries no endpoint identity (it predates tmux_boot= recording), and a server-wide window inventory only describes the tmux server this process addresses, so a window absent from it may still be alive on another
