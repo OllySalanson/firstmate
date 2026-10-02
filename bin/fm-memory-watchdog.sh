@@ -16,8 +16,11 @@
 #       processor, and connection ranges and peaks, when each gate held new
 #       work back, the busiest worker, throttles, gaps, watchdog actions,
 #       and a timeline. A time is epoch seconds or anything `date -d` reads
-#       (17:00, "2026-10-02 17:00", "20 minutes ago"); a bare HH:MM later
-#       than now means yesterday. The default window is the last 30 minutes.
+#       (17:00, "2026-10-02 17:00", "20 minutes ago"). A bare HH:MM --since,
+#       or a lone --until, later than now means yesterday; with --since, a
+#       bare HH:MM --until is its next occurrence after --since, so a window
+#       may cross midnight. --until is capped at now. The default window is
+#       the last 30 minutes.
 #   fm-memory-watchdog.sh queue
 #       This home's dispatchable queued work (bin/fm-tasks-axi.sh ready) in
 #       dispatch order: the flagship project's items first, then everything
