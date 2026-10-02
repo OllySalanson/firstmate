@@ -358,8 +358,13 @@ fm_pr_regular_destination_on_device_or_absent() {
   [ ! -e "$path" ] || [ "$(fm_pr_file_device "$path")" = "$device" ]
 }
 
+# The task record is a key=value file that other owners legitimately republish
+# or append to after the PR is armed (a relaunch's control_relaunch_tx=, a
+# captain-hold attestation's decisions_reviewed=), so the identity is the single
+# pr= line wherever it sits, and an unrelated field after it never revokes it.
+# A pr_head= following that pr= must still be a valid head.
 fm_pr_metadata_identity_parse() {
-  local file=$1 line value pr_count=0 seen_pr=0 post_pr_invalid=0
+  local file=$1 line value pr_count=0 seen_pr=0 head_invalid=0
   FM_PR_META_PROVIDER=
   FM_PR_META_URL=
   FM_PR_META_HOST=
@@ -385,18 +390,13 @@ fm_pr_metadata_identity_parse() {
       pr_head=*)
         if [ "$seen_pr" -eq 1 ]; then
           value=${line#pr_head=}
-          fm_pr_head_valid "$value" || post_pr_invalid=1
+          fm_pr_head_valid "$value" || head_invalid=1
         fi
-        ;;
-      x_request=*|x_request_ts=*|x_followups=*|x_platform=*|x_reply_max_chars=*)
-        ;;
-      *)
-        [ "$seen_pr" -eq 0 ] || post_pr_invalid=1
         ;;
     esac
   done < "$file"
   [ "$pr_count" -eq 1 ] || return 1
-  [ "$post_pr_invalid" -eq 0 ] || return 1
+  [ "$head_invalid" -eq 0 ] || return 1
   [ -n "$FM_PR_META_URL" ]
 }
 
