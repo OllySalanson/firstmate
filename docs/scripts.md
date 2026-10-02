@@ -59,8 +59,9 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-remote-readiness-lib.sh` | Shared remote second-mate readiness gate: check and, when needed, repair then re-check through `fm-remote-doctor.sh` |
 | [`fm-project-origin-lib.sh`](../bin/fm-project-origin-lib.sh) | Accepted origin-form owner shared by both remote provisioning boundaries |
 | `fm-spawn.sh`            | Spawn crewmates, scouts, `id=repo` batches, and secondmates on the resolved harness and runtime backend, deferring a ship or scout spawn or relaunch the memory gate refuses |
-| `fm-memory-watchdog.sh`  | Memory gate: worker admission with hysteresis and reservations, per-job size ceilings, the critical-line heavy-job stop, flagship-first dispatch order, and the gate status (docs/configuration.md "Memory gate") |
-| `fm-memory-lib.sh`       | Memory gate mechanics: meminfo sampling, the gate and reservation records, and heavy-job discovery under recorded task worktrees |
+| `fm-memory-watchdog.sh`  | The one watchdog: worker admission against the memory, processor, and connection gates, per-job size ceilings, the critical-line heavy-job stop, the processor and connection throttle, flagship-first dispatch order, the gate status, and the plain-words `history` view (docs/configuration.md "Memory gate") |
+| `fm-memory-lib.sh`       | Memory gate mechanics: meminfo sampling, the gate and reservation records, heavy-job discovery under recorded task worktrees, and the config/memory-gate parser |
+| `fm-load-lib.sh`         | Processor and connection mechanics: pressure, load, and latency sampling, their gates, per-worker processor and traffic attribution, the throttle's pause and priority signals, and the rotating sample history |
 | `fm-backend.sh`          | Runtime-backend selection, meta helpers, selector resolution, and operation dispatch |
 | `fm-backend-hometag-lib.sh` | Shared per-installation home-tag derivation for zellij tab and cmux workspace titles |
 | `fm-composer-lib.sh`     | Single fleet-wide owner of composer shapes, capability-aware screen classification, and verdicts |

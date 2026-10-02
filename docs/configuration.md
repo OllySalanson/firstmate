@@ -459,8 +459,9 @@ Every claude launch's inline `--settings` JSON also carries `"attribution":{"com
 
 ## Memory gate (config/memory-gate, config/flagship)
 
-One memory watchdog, [`bin/fm-memory-watchdog.sh`](../bin/fm-memory-watchdog.sh), owns admission of new workers so the machine never runs more work than its memory holds.
-It reads `/proc/meminfo`, so it works on Linux and WSL; on a platform without it, such as macOS, every spawn is admitted with a printed warning rather than blocked.
+One watchdog, [`bin/fm-memory-watchdog.sh`](../bin/fm-memory-watchdog.sh), owns admission of new workers so the machine never runs more work than its memory, its processors, or its internet connection can carry.
+Memory is described first; the processor and connection gates and the sample history follow under their own headings, and one config file tunes all of them.
+It reads `/proc`, so it works on Linux and WSL; on a platform without `/proc/meminfo`, such as macOS, every spawn is admitted with a printed warning rather than blocked.
 "Memory used" is RAM the kernel cannot hand out without swapping (MemTotal minus MemAvailable) as a percentage of MemTotal, and each worker admitted in the last few minutes also counts as reserved memory until its own memory shows up, so a burst of spawns can never be admitted all at once.
 
 The gate closes when counted memory reaches the close line (default 85%), or when swap is nearly exhausted, and reopens only below the reopen line (default 70%).
@@ -484,6 +485,38 @@ A browser inside a test run is measured by itself, so only the browser is stoppe
 Every ship and scout worker is launched with `CHROME_DEVTOOLS_AXI_SESSION=fm-<task-id>`, so each drives its own chrome-devtools-axi browser, started from its own local copy, and a ballooning browser is attributed to and stopped for the worker that owns it.
 Ship and scout briefs (`bin/fm-brief.sh`) tell workers to keep one headless browser at a time, close it between screenshots, use a small viewport, and cap test-runner workers.
 
+### Processor and connection
+
+The processor gate closes when CPU pressure (the share of the last ten seconds in which a runnable task waited for a processor, from `/proc/pressure/cpu`) reaches its close line (default 25%), or when the one-minute load average reaches its close line as a share of the processor count (default 90% of the cores).
+It reopens only once both are under their reopen lines (defaults 10% and 70%).
+Load per core counts as well as pressure because WSL shares the machine's cores with Windows: a game or browser starts lagging once WSL asks for most of the cores, before WSL itself is oversubscribed and pressure rises.
+Without a pressure reading, load alone decides.
+
+The connection gate watches round-trip latency to a stable host (default `1.1.1.1`), probed in the background once every few seconds, because a saturated upload shows first as queueing delay on every connection in the house.
+It closes when current latency (the median of the last three probes) reaches its close line above the connection's normal latency (default 80 ms above), and reopens below its reopen line (default 30 ms above).
+Normal latency is learned from the last hour of probes, so until a few probes have succeeded, or when the host never answers, the connection never holds work back.
+Upload and download rates of the WSL network interface are measured and shown, but latency is what decides.
+
+New spawns and relaunches are deferred while either gate is closed, exactly like a full memory gate, with a `deferred:` line naming the reading; the room notice waits for all three gates, and `--memory-override` admits past any of them.
+
+When the processor or the connection stays past its critical line (defaults: pressure 50% or load 115% of the cores; latency 200 ms above normal) for `critical_secs` (default 30 seconds), the watchdog throttles the worker of this home using the most of it, measured over its whole process tree, and tells that worker why through `bin/fm-send.sh`.
+For the processor it first lowers the priority of the worker's agent and commands; if the processor is still critical after another `critical_secs`, it pauses the worker's commands (SIGSTOP) for ten seconds at a time with ten seconds of running in between (SIGCONT).
+For the connection it goes straight to pausing, since priority does not slow traffic.
+It releases once the reading falls back under its close line, and tells the worker and firstmate at every step; lowered priority stays, because an unprivileged process cannot raise it again, and only matters while the machine is busy.
+Nothing is ever killed, the worker agent process itself is never paused (so it keeps reading its inbox), and nothing outside a recorded ship or scout worker's own process tree - firstmate, a secondmate, the terminal, the no-mistakes daemon, or the owner's own programs - is ever throttled.
+When the overload comes from somewhere else, the watchdog reports that once per episode and throttles nothing.
+Processor use counts commands that already finished, while traffic covers TCP connections only, so a worker's UDP (QUIC) traffic is not attributed.
+Windows-side programs are out of reach: the watchdog sees and controls only WSL.
+
+### History
+
+While its loop runs, the watchdog appends one compact sample every 15 seconds to `state/watchdog-history`: memory, CPU pressure, load, upload and download rates, latency and normal latency, the three gates, the worker using the most processor and the one carrying the most traffic, and any throttle.
+When the file passes `history_kb` (default 1024) it becomes `state/watchdog-history.1`, replacing the previous one, so the history stays bounded, about two days at the defaults.
+`bin/fm-memory-watchdog.sh history --since 17:00 --until 17:30` explains a window in plain words: ranges and peaks, when each gate held new work back, the busiest worker, throttles, gaps when the loop was not running, the watchdog's actions, and a timeline; without options it covers the last 30 minutes.
+The loop runs only while the home has workers or deferred work, so an idle home records no samples.
+
+### Flagship and config
+
 `config/flagship` is optional, local, and gitignored, and holds one project name matching the backlog's `repo:` field; set it with `bin/fm-memory-watchdog.sh flagship <project>` and clear it with `--clear`.
 It is a per-session choice of this home, so it is not inherited by secondmate homes.
 
@@ -498,14 +531,30 @@ reserve_mb=1024   # memory counted for each just-admitted worker
 reserve_secs=180  # how long a just-admitted worker stays reserved
 browser_ceiling_mb=1536  # one headless browser tree above this is stopped
 job_ceiling_mb=3072      # one test-run or terraform job above this is stopped
-enabled=on        # off admits every spawn and disables the critical stop and the ceilings
+enabled=on        # off admits every spawn and disables the whole watchdog
+processor=on      # off ignores the processor: no gate, no throttle
+cpu_close=25      # percent CPU pressure that closes the processor gate
+cpu_reopen=10     # percent CPU pressure below which it can reopen
+cpu_critical=50   # percent CPU pressure that starts the throttle clock
+load_close=90     # load average as a percent of the cores that closes the processor gate
+load_reopen=70    # load percent below which it can reopen
+load_critical=115 # load percent that starts the throttle clock
+connection=on     # off ignores the connection: no gate, no throttle
+latency_close_ms=80     # latency above normal that closes the connection gate
+latency_reopen_ms=30    # latency above normal below which it can reopen
+latency_critical_ms=200 # latency above normal that starts the throttle clock
+latency_host=1.1.1.1    # the stable host the latency probe pings
+net_interface=eth0      # the interface whose rates are shown; absent = the default route's
+critical_secs=30  # how long the processor or connection stays critical before a throttle step
+history_kb=1024   # size at which the sample history rotates
 ```
 
-Values must satisfy `reopen < close < critical <= 100`.
+The defaults suit an 8-core, roughly 11 GB WSL machine on home Wi-Fi.
+Values must satisfy `reopen < close < critical <= 100` for memory and for `cpu_*`, `load_reopen < load_close < load_critical <= 1000`, and `latency_reopen_ms < latency_close_ms < latency_critical_ms`.
 A malformed file makes every spawn refuse with the reason, while the watchdog loop keeps protecting on the defaults and reports the problem once.
 
-`bin/fm-memory-watchdog.sh status` prints the gate, memory in use, reservations, the lines, the job ceilings, the flagship, deferred work, whether the watchdog loop is running, and its recent events.
-The gate records are machine-wide, kept in the local root home's `state/`, so every home on one machine shares one gate; deferred work and events stay in each home.
+`bin/fm-memory-watchdog.sh status` prints each gate with its reading, reservations, every gate's lines, the job ceilings, any throttle, the flagship, deferred work, whether the watchdog loop is running, the history's extent, and its recent events.
+The gate records and latency probes are machine-wide, kept in the local root home's `state/`, so every home on one machine shares one set of gates; deferred work, events, history, and throttles stay in each home, and each home throttles only its own workers.
 The watchdog's detached loop is started and kept alive by the watcher and by each spawn, ticks every few seconds so it keeps protecting while the watcher waits for firstmate's next turn, and exits by itself once the home has no task records and no deferred work.
 The script's header owns the exact commands, records, and tuning variables.
 

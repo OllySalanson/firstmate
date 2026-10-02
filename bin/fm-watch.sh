@@ -106,9 +106,10 @@
 #                          payload names what to check. These three kinds are
 #                          joined with `;` when more than one surfaces in a cycle
 #   check: memory-watchdog: <events>
-#                          the memory watchdog recorded room for deferred work
-#                          or a critical-line job stop (bin/fm-memory-watchdog.sh
-#                          poll owns the text; each event surfaces once)
+#                          the watchdog recorded room for deferred work, a
+#                          critical-line job stop, or a processor or connection
+#                          throttle step (bin/fm-memory-watchdog.sh poll owns
+#                          the text; each event surfaces once)
 #   check: rejected unauthenticated state checks: <paths>
 #                          unsafe state checks were refused without execution
 #   check: rejected unauthenticated PR poll retirement receipts: <paths>
@@ -2459,10 +2460,10 @@ while :; do
   # generic recovery reason, so give that owner first refusal.
   resurface_after_downtime
 
-  # Memory watchdog (bin/fm-memory-watchdog.sh): keep its detached loop alive
-  # while this home has work, and surface the room and critical-stop events it
-  # recorded. The loop owns admission state and the critical stop; this poll is
-  # its only path to firstmate.
+  # Watchdog (bin/fm-memory-watchdog.sh): keep its detached loop alive while
+  # this home has work, and surface the room, critical-stop, and throttle
+  # events it recorded. The loop owns admission state, the critical stop, and
+  # the throttle; this poll is its only path to firstmate.
   memory_out=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-memory-watchdog.sh" poll 2>/dev/null) || memory_out=
   if [ -n "$memory_out" ]; then
     wake "check: $memory_out"

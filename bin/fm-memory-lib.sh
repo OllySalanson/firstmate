@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# fm-memory-lib.sh - the memory gate's shared mechanics, sourced by
-# bin/fm-memory-watchdog.sh (the command surface) and nothing else.
+# fm-memory-lib.sh - the memory gate's shared mechanics and the parser for
+# the whole of config/memory-gate, sourced by bin/fm-memory-watchdog.sh (the
+# command surface) and bin/fm-load-lib.sh (the processor, connection, and
+# history mechanics) and nothing else.
 #
 # docs/configuration.md "Memory gate" owns the operator contract: what the
-# gate, the critical line, and the flagship mean, and the config/ files that
-# tune them. This header owns the mechanics.
+# gates, the critical lines, and the flagship mean, and the config/ files that
+# tune them. This header owns the memory mechanics.
 #
 # Reading memory. The only source is <proc>/meminfo, where <proc> is
 # FM_MEMORY_PROC_ROOT (default /proc; tests point it at a fake tree), read for
@@ -62,9 +64,17 @@ FM_MEMORY_DEFERRED_EXIT=75
 # --- configuration ---------------------------------------------------------
 
 # fm_memory_load_config <config-dir>
+# Parses the whole of config/memory-gate, the one watchdog's config file.
 # Sets FM_MEMORY_ENABLED (1/0), FM_MEMORY_CLOSE, FM_MEMORY_REOPEN,
 # FM_MEMORY_CRITICAL, FM_MEMORY_RESERVE_MB, FM_MEMORY_RESERVE_SECS,
-# FM_MEMORY_BROWSER_CEILING_MB, FM_MEMORY_JOB_CEILING_MB.
+# FM_MEMORY_BROWSER_CEILING_MB, FM_MEMORY_JOB_CEILING_MB, and the processor,
+# connection, and history settings bin/fm-load-lib.sh acts on:
+# FM_CPU_ENABLED, FM_CPU_CLOSE, FM_CPU_REOPEN, FM_CPU_CRITICAL (pressure
+# percent), FM_LOAD_CLOSE, FM_LOAD_REOPEN, FM_LOAD_CRITICAL (load as percent
+# of cores), FM_NET_ENABLED, FM_LATENCY_CLOSE_MS, FM_LATENCY_REOPEN_MS,
+# FM_LATENCY_CRITICAL_MS (milliseconds above normal), FM_LATENCY_HOST,
+# FM_NET_INTERFACE (empty = the default route's), FM_CRITICAL_SECS, and
+# FM_HISTORY_KB.
 # Returns 1 with FM_MEMORY_CONFIG_ERROR set for a malformed config/memory-gate;
 # the defaults stay loaded so a caller that must keep protecting can use them.
 fm_memory_load_config() {
@@ -77,6 +87,21 @@ fm_memory_load_config() {
   FM_MEMORY_RESERVE_SECS=180
   FM_MEMORY_BROWSER_CEILING_MB=1536
   FM_MEMORY_JOB_CEILING_MB=3072
+  FM_CPU_ENABLED=1
+  FM_CPU_CLOSE=25
+  FM_CPU_REOPEN=10
+  FM_CPU_CRITICAL=50
+  FM_LOAD_CLOSE=90
+  FM_LOAD_REOPEN=70
+  FM_LOAD_CRITICAL=115
+  FM_NET_ENABLED=1
+  FM_LATENCY_CLOSE_MS=80
+  FM_LATENCY_REOPEN_MS=30
+  FM_LATENCY_CRITICAL_MS=200
+  FM_LATENCY_HOST=1.1.1.1
+  FM_NET_INTERFACE=
+  FM_CRITICAL_SECS=30
+  FM_HISTORY_KB=1024
   FM_MEMORY_CONFIG_ERROR=
   file="$dir/memory-gate"
   [ -e "$file" ] || [ -L "$file" ] || return 0
@@ -87,6 +112,11 @@ fm_memory_load_config() {
   local close=$FM_MEMORY_CLOSE reopen=$FM_MEMORY_REOPEN critical=$FM_MEMORY_CRITICAL
   local reserve_mb=$FM_MEMORY_RESERVE_MB reserve_secs=$FM_MEMORY_RESERVE_SECS enabled=1
   local browser_ceiling_mb=$FM_MEMORY_BROWSER_CEILING_MB job_ceiling_mb=$FM_MEMORY_JOB_CEILING_MB
+  local processor=1 cpu_close=$FM_CPU_CLOSE cpu_reopen=$FM_CPU_REOPEN cpu_critical=$FM_CPU_CRITICAL
+  local load_close=$FM_LOAD_CLOSE load_reopen=$FM_LOAD_REOPEN load_critical=$FM_LOAD_CRITICAL
+  local connection=1 latency_close_ms=$FM_LATENCY_CLOSE_MS latency_reopen_ms=$FM_LATENCY_REOPEN_MS
+  local latency_critical_ms=$FM_LATENCY_CRITICAL_MS latency_host=$FM_LATENCY_HOST net_interface=
+  local critical_secs=$FM_CRITICAL_SECS history_kb=$FM_HISTORY_KB switch
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line%%#*}
     line=$(printf '%s' "$line" | tr -d '[:space:]')
@@ -99,20 +129,37 @@ fm_memory_load_config() {
         ;;
     esac
     case "$key" in
-      enabled)
+      enabled | processor | connection)
         case "$value" in
-          on) enabled=1 ;;
-          off) enabled=0 ;;
+          on) switch=1 ;;
+          off) switch=0 ;;
           *)
-            FM_MEMORY_CONFIG_ERROR="config/memory-gate enabled must be on or off (got '$value')"
+            FM_MEMORY_CONFIG_ERROR="config/memory-gate $key must be on or off (got '$value')"
             return 1
             ;;
         esac
+        case "$key" in
+          enabled) enabled=$switch ;;
+          processor) processor=$switch ;;
+          connection) connection=$switch ;;
+        esac
+        continue
+        ;;
+      latency_host | net_interface)
+        case "$value" in
+          '' | -* | *[!A-Za-z0-9._:-]*)
+            FM_MEMORY_CONFIG_ERROR="config/memory-gate $key must be a host or interface name (letters, digits, dot, colon, dash, underscore; got '$value')"
+            return 1
+            ;;
+        esac
+        if [ "$key" = latency_host ]; then latency_host=$value; else net_interface=$value; fi
         continue
         ;;
       close | reopen | critical | reserve_mb | reserve_secs | browser_ceiling_mb | job_ceiling_mb) ;;
+      cpu_close | cpu_reopen | cpu_critical | load_close | load_reopen | load_critical) ;;
+      latency_close_ms | latency_reopen_ms | latency_critical_ms | critical_secs | history_kb) ;;
       *)
-        FM_MEMORY_CONFIG_ERROR="config/memory-gate has unknown key '$key' (known: enabled, close, reopen, critical, reserve_mb, reserve_secs, browser_ceiling_mb, job_ceiling_mb)"
+        FM_MEMORY_CONFIG_ERROR="config/memory-gate has unknown key '$key' (known: enabled, close, reopen, critical, reserve_mb, reserve_secs, browser_ceiling_mb, job_ceiling_mb, processor, cpu_close, cpu_reopen, cpu_critical, load_close, load_reopen, load_critical, connection, latency_close_ms, latency_reopen_ms, latency_critical_ms, latency_host, net_interface, critical_secs, history_kb)"
         return 1
         ;;
     esac
@@ -130,10 +177,33 @@ fm_memory_load_config() {
       reserve_secs) reserve_secs=$value ;;
       browser_ceiling_mb) browser_ceiling_mb=$value ;;
       job_ceiling_mb) job_ceiling_mb=$value ;;
+      cpu_close) cpu_close=$value ;;
+      cpu_reopen) cpu_reopen=$value ;;
+      cpu_critical) cpu_critical=$value ;;
+      load_close) load_close=$value ;;
+      load_reopen) load_reopen=$value ;;
+      load_critical) load_critical=$value ;;
+      latency_close_ms) latency_close_ms=$value ;;
+      latency_reopen_ms) latency_reopen_ms=$value ;;
+      latency_critical_ms) latency_critical_ms=$value ;;
+      critical_secs) critical_secs=$value ;;
+      history_kb) history_kb=$value ;;
     esac
   done <"$file"
   if [ "$reopen" -ge "$close" ] || [ "$close" -ge "$critical" ] || [ "$critical" -gt 100 ]; then
     FM_MEMORY_CONFIG_ERROR="config/memory-gate needs reopen < close < critical <= 100 (got reopen=$reopen close=$close critical=$critical)"
+    return 1
+  fi
+  if [ "$cpu_reopen" -ge "$cpu_close" ] || [ "$cpu_close" -ge "$cpu_critical" ] || [ "$cpu_critical" -gt 100 ]; then
+    FM_MEMORY_CONFIG_ERROR="config/memory-gate needs cpu_reopen < cpu_close < cpu_critical <= 100 (got cpu_reopen=$cpu_reopen cpu_close=$cpu_close cpu_critical=$cpu_critical)"
+    return 1
+  fi
+  if [ "$load_reopen" -ge "$load_close" ] || [ "$load_close" -ge "$load_critical" ] || [ "$load_critical" -gt 1000 ]; then
+    FM_MEMORY_CONFIG_ERROR="config/memory-gate needs load_reopen < load_close < load_critical <= 1000 (got load_reopen=$load_reopen load_close=$load_close load_critical=$load_critical)"
+    return 1
+  fi
+  if [ "$latency_reopen_ms" -ge "$latency_close_ms" ] || [ "$latency_close_ms" -ge "$latency_critical_ms" ]; then
+    FM_MEMORY_CONFIG_ERROR="config/memory-gate needs latency_reopen_ms < latency_close_ms < latency_critical_ms (got latency_reopen_ms=$latency_reopen_ms latency_close_ms=$latency_close_ms latency_critical_ms=$latency_critical_ms)"
     return 1
   fi
   FM_MEMORY_ENABLED=$enabled
@@ -144,6 +214,21 @@ fm_memory_load_config() {
   FM_MEMORY_RESERVE_SECS=$reserve_secs
   FM_MEMORY_BROWSER_CEILING_MB=$browser_ceiling_mb
   FM_MEMORY_JOB_CEILING_MB=$job_ceiling_mb
+  FM_CPU_ENABLED=$processor
+  FM_CPU_CLOSE=$cpu_close
+  FM_CPU_REOPEN=$cpu_reopen
+  FM_CPU_CRITICAL=$cpu_critical
+  FM_LOAD_CLOSE=$load_close
+  FM_LOAD_REOPEN=$load_reopen
+  FM_LOAD_CRITICAL=$load_critical
+  FM_NET_ENABLED=$connection
+  FM_LATENCY_CLOSE_MS=$latency_close_ms
+  FM_LATENCY_REOPEN_MS=$latency_reopen_ms
+  FM_LATENCY_CRITICAL_MS=$latency_critical_ms
+  FM_LATENCY_HOST=$latency_host
+  FM_NET_INTERFACE=$net_interface
+  FM_CRITICAL_SECS=$critical_secs
+  FM_HISTORY_KB=$history_kb
   return 0
 }
 
