@@ -47,7 +47,9 @@
 # member whose smaps_rollup is unreadable counts its VmRSS instead. Ship and
 # scout workers each drive their own chrome-devtools-axi session
 # (bin/fm-spawn.sh exports CHROME_DEVTOOLS_AXI_SESSION=fm-<task-id>), so a
-# worker's browser runs from its own worktree and is attributed to it alone.
+# worker's browser runs from its own worktree and is attributed to it alone;
+# a worktree two records name belongs to one of them
+# (fm_memory_task_worktrees owns which).
 # Only argv[0] and the first two arguments are read, so a worker
 # agent whose brief merely mentions "vitest" is never mistaken for a job, and
 # a subtree that contains any worker-agent process is skipped outright.
@@ -73,8 +75,8 @@ FM_MEMORY_DEFERRED_EXIT=75
 # percent), FM_LOAD_CLOSE, FM_LOAD_REOPEN, FM_LOAD_CRITICAL (load as percent
 # of cores), FM_NET_ENABLED, FM_LATENCY_CLOSE_MS, FM_LATENCY_REOPEN_MS,
 # FM_LATENCY_CRITICAL_MS (milliseconds above normal), FM_LATENCY_HOST,
-# FM_NET_INTERFACE (empty = the default route's), FM_CRITICAL_SECS, and
-# FM_HISTORY_KB.
+# FM_NET_INTERFACE (empty = the default route's), FM_NET_BUSY_KBS,
+# FM_NET_CALM_SECS, FM_CRITICAL_SECS, and FM_HISTORY_KB.
 # Returns 1 with FM_MEMORY_CONFIG_ERROR set for a malformed config/memory-gate;
 # the defaults stay loaded so a caller that must keep protecting can use them.
 fm_memory_load_config() {
@@ -100,6 +102,8 @@ fm_memory_load_config() {
   FM_LATENCY_CRITICAL_MS=200
   FM_LATENCY_HOST=1.1.1.1
   FM_NET_INTERFACE=
+  FM_NET_BUSY_KBS=512
+  FM_NET_CALM_SECS=300
   FM_CRITICAL_SECS=30
   FM_HISTORY_KB=1024
   FM_MEMORY_CONFIG_ERROR=
@@ -116,6 +120,7 @@ fm_memory_load_config() {
   local load_close=$FM_LOAD_CLOSE load_reopen=$FM_LOAD_REOPEN load_critical=$FM_LOAD_CRITICAL
   local connection=1 latency_close_ms=$FM_LATENCY_CLOSE_MS latency_reopen_ms=$FM_LATENCY_REOPEN_MS
   local latency_critical_ms=$FM_LATENCY_CRITICAL_MS latency_host=$FM_LATENCY_HOST net_interface=
+  local net_busy_kbs=$FM_NET_BUSY_KBS net_calm_secs=$FM_NET_CALM_SECS
   local critical_secs=$FM_CRITICAL_SECS history_kb=$FM_HISTORY_KB switch
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line%%#*}
@@ -157,9 +162,10 @@ fm_memory_load_config() {
         ;;
       close | reopen | critical | reserve_mb | reserve_secs | browser_ceiling_mb | job_ceiling_mb) ;;
       cpu_close | cpu_reopen | cpu_critical | load_close | load_reopen | load_critical) ;;
-      latency_close_ms | latency_reopen_ms | latency_critical_ms | critical_secs | history_kb) ;;
+      latency_close_ms | latency_reopen_ms | latency_critical_ms | net_busy_kbs | net_calm_secs) ;;
+      critical_secs | history_kb) ;;
       *)
-        FM_MEMORY_CONFIG_ERROR="config/memory-gate has unknown key '$key' (known: enabled, close, reopen, critical, reserve_mb, reserve_secs, browser_ceiling_mb, job_ceiling_mb, processor, cpu_close, cpu_reopen, cpu_critical, load_close, load_reopen, load_critical, connection, latency_close_ms, latency_reopen_ms, latency_critical_ms, latency_host, net_interface, critical_secs, history_kb)"
+        FM_MEMORY_CONFIG_ERROR="config/memory-gate has unknown key '$key' (known: enabled, close, reopen, critical, reserve_mb, reserve_secs, browser_ceiling_mb, job_ceiling_mb, processor, cpu_close, cpu_reopen, cpu_critical, load_close, load_reopen, load_critical, connection, latency_close_ms, latency_reopen_ms, latency_critical_ms, latency_host, net_interface, net_busy_kbs, net_calm_secs, critical_secs, history_kb)"
         return 1
         ;;
     esac
@@ -186,6 +192,8 @@ fm_memory_load_config() {
       latency_close_ms) latency_close_ms=$value ;;
       latency_reopen_ms) latency_reopen_ms=$value ;;
       latency_critical_ms) latency_critical_ms=$value ;;
+      net_busy_kbs) net_busy_kbs=$value ;;
+      net_calm_secs) net_calm_secs=$value ;;
       critical_secs) critical_secs=$value ;;
       history_kb) history_kb=$value ;;
     esac
@@ -227,6 +235,8 @@ fm_memory_load_config() {
   FM_LATENCY_CRITICAL_MS=$latency_critical_ms
   FM_LATENCY_HOST=$latency_host
   FM_NET_INTERFACE=$net_interface
+  FM_NET_BUSY_KBS=$net_busy_kbs
+  FM_NET_CALM_SECS=$net_calm_secs
   FM_CRITICAL_SECS=$critical_secs
   FM_HISTORY_KB=$history_kb
   return 0
@@ -527,27 +537,84 @@ fm_memory_argv_is_heavy() {
 }
 
 # fm_memory_task_worktrees <state-dir>: "task<TAB>worktree" for every recorded
-# ship or scout task whose worktree is a real absolute directory other than /.
+# ship or scout task whose worktree is a real absolute directory other than /,
+# one owner per worktree. A worktree pool can hand a dead task's directory to
+# a new task while the dead task's record remains, so when several records
+# name one worktree its owner is the task a worker agent running there names
+# in its own launch environment (FM_TASK_ID, which bin/fm-spawn.sh exports),
+# else the most recently spawned record (spawn_gen), and the other records
+# get nothing attributed, stopped, throttled, or told.
 fm_memory_task_worktrees() {
-  local state=$1 meta task kind wt line
+  local state=$1 meta task kind wt gen line i j n=0 shared=$'\n' owners=
+  local tasks=() wts=() gens=()
   for meta in "$state"/*.meta; do
     [ -f "$meta" ] || continue
     task=${meta##*/}
     task=${task%.meta}
     kind=
     wt=
+    gen=
     while IFS= read -r line || [ -n "$line" ]; do
       case "$line" in
         kind=*) kind=${line#kind=} ;;
         worktree=*) wt=${line#worktree=} ;;
+        spawn_gen=s[0-9]*) gen=${line#spawn_gen=s} gen=${gen%%[!0-9]*} ;;
       esac
     done <"$meta"
     case "${kind:-ship}" in ship | scout) ;; *) continue ;; esac
     case "$wt" in /?*) ;; *) continue ;; esac
     wt=${wt%/}
     [ -n "$wt" ] && [ -d "$wt" ] || continue
-    printf '%s\t%s\n' "$task" "$wt"
+    for ((j = 0; j < n; j++)); do
+      [ "${wts[j]}" != "$wt" ] || shared="$shared$wt"$'\n'
+    done
+    tasks[n]=$task wts[n]=$wt gens[n]=${gen:-0}
+    n=$((n + 1))
   done
+  # "worktree<TAB>task" for each shared worktree a worker agent names.
+  [ "$shared" = $'\n' ] || owners=$(fm_memory_worktree_agents "$shared")
+  for ((i = 0; i < n; i++)); do
+    case "$shared" in
+      *$'\n'"${wts[i]}"$'\n'*)
+        task=$(printf '%s\n' "$owners" | awk -F '\t' -v wt="${wts[i]}" '$1 == wt { print $2; exit }')
+        for ((j = 0; j < n; j++)); do
+          [ "$j" != "$i" ] && [ "${wts[j]}" = "${wts[i]}" ] || continue
+          # Another record names this worktree: keep this one only as its owner.
+          if [ -n "$task" ] && { [ "$task" = "${tasks[i]}" ] || [ "$task" = "${tasks[j]}" ]; }; then
+            [ "$task" = "${tasks[i]}" ] || continue 2
+          elif [ "${gens[j]}" -gt "${gens[i]}" ] || { [ "${gens[j]}" = "${gens[i]}" ] && [ "$j" -lt "$i" ]; }; then
+            continue 2
+          fi
+        done
+        ;;
+    esac
+    printf '%s\t%s\n' "${tasks[i]}" "${wts[i]}"
+  done
+}
+
+# fm_memory_worktree_agents <worktrees>: "worktree<TAB>task" for each
+# worktree (one per line) in which a worker agent runs, the task being the
+# FM_TASK_ID in that agent's own environment.
+fm_memory_worktree_agents() {
+  local proc pid wt id
+  proc=$(fm_memory_proc_root)
+  while IFS="$(printf '\t')" read -r pid wt; do
+    fm_memory_argv "$pid" || continue
+    fm_memory_argv_is_agent || continue
+    id=$({ tr '\0' '\n' <"$proc/$pid/environ"; } 2>/dev/null | sed -n 's/^FM_TASK_ID=//p' | head -n 1)
+    [ -z "$id" ] || printf '%s\t%s\n' "$wt" "$id"
+  done <<EOF_CWDS
+$(find "$proc" -mindepth 2 -maxdepth 2 -name cwd -printf '%h\t%l\n' 2>/dev/null |
+    awk -F '\t' -v list="$1" '
+      BEGIN { n = split(list, w, "\n") }
+      {
+        pid = $1; sub(/.*\//, "", pid)
+        if (pid !~ /^[0-9]+$/) next
+        for (i = 1; i <= n; i++)
+          if (w[i] != "" && ($2 == w[i] || index($2, w[i] "/") == 1)) { print pid "\t" w[i]; next }
+      }
+    ')
+EOF_CWDS
 }
 
 # fm_memory_heavy_jobs <state-dir> <out-file>: write one line per heavy job,

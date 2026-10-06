@@ -26,13 +26,24 @@
 # every FM_WATCHDOG_PROBE_EVERY seconds (default 6), one packet with a 2 s
 # timeout, through FM_WATCHDOG_PING_CMD (default ping; tests replace it); the
 # next tick harvests its result into the shared ring .net-latency
-# ("epoch<TAB>ms", or "epoch<TAB>timeout"), trimmed to its last 600 lines. The
-# current latency is the median of the last three probes from the last 60 s,
-# with a timeout counted as 2000 ms. Normal latency is the 20th percentile of
-# the successful probes in the last hour, and needs at least five of them.
-# Without a normal figure the connection is "unknown", which never closes
-# the gate. The connection lines compare current latency minus normal
-# latency, because a saturated upload shows first as queueing delay.
+# ("epoch<TAB>ms<TAB>bytes<TAB>interface", ms being "timeout" for a lost
+# probe and bytes the measured interface's received plus sent byte counter
+# at harvest, both omitted without readable counters), trimmed to its last
+# 600 lines. A reading covers the probes of the last FM_LOAD_NET_WINDOW
+# (60) seconds: its latency is their median, a timeout counting as 2000 ms,
+# and its traffic is this machine's KB/s between the first and last of them
+# carrying counters, which needs them to span at least half the window on
+# one interface. Normal latency is the 20th percentile of the successful
+# probes in the last hour, and needs at least five of them. Without a normal
+# figure the connection is "unknown", which never closes the gate.
+# The connection lines compare current latency minus normal latency, because
+# a saturated link shows first as queueing delay, but that delay counts
+# only while this machine moves at least net_busy_kbs: below it, raised
+# latency is the connection itself (a phone hotspot or busy mobile cell,
+# Wi-Fi, other devices), not an overload this machine causes, so the level
+# reads low. Once a busy reading reaches the close line, the level reads at
+# least high until no busy reading has reached it for net_calm_secs,
+# recomputed from the ring at every read, so one overload is one episode.
 #
 # Gates. .cpu-gate and .net-gate in the shared state directory hold
 # "open|closed epoch" with the memory gate's hysteresis: closed when a close
@@ -44,9 +55,11 @@
 # Attribution (fm_load_task_trees). A task's tree is each worker agent
 # process (bin/fm-memory-lib.sh fm_memory_argv_is_agent) whose working
 # directory is inside a recorded ship or scout worktree and whose parent is
-# not such an agent, plus every descendant of it. Nothing outside those trees
-# - firstmate, a secondmate, the terminal multiplexer, the no-mistakes daemon,
-# or the owner's own programs - is ever attributed, throttled, or signaled.
+# not such an agent, plus every descendant of it; a worktree two records name
+# belongs to one of them (bin/fm-memory-lib.sh fm_memory_task_worktrees).
+# Nothing outside those trees - firstmate, a secondmate, the terminal
+# multiplexer, the no-mistakes daemon, or the owner's own programs - is ever
+# attributed, throttled, or signaled.
 # Processor use is the summed utime+stime+cutime+cstime of a tree between two
 # samples, so commands that already exited still count through the parent
 # that reaped them. Connection use is the TCP bytes acknowledged plus received
@@ -82,6 +95,7 @@ FM_LOAD_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$FM_LOAD_LIB_DIR/fm-memory-lib.sh"
 
 FM_LOAD_NICE=10
+FM_LOAD_NET_WINDOW=60
 
 # --- processor ---------------------------------------------------------------
 
@@ -201,12 +215,18 @@ fm_load_gate_update() {
 # fm_load_latency_harvest <shared-state> <now>: move a finished probe's result
 # into the latency ring.
 fm_load_latency_harvest() {
-  local shared=$1 now=$2 out="$1/.net-probe.out" ms ring="$1/.net-latency"
+  local shared=$1 now=$2 out="$1/.net-probe.out" ms ring="$1/.net-latency" rx tx iface counters=
   [ -f "$out" ] || return 0
   ms=$(awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^time[=<]/) { v = $i; sub(/^time[=<]/, "", v); if (v == "" && i < NF) v = $(i + 1); printf "%d", v + 0.5; exit } }' "$out" 2>/dev/null)
   rm -f "$out"
   case "$ms" in '' | *[!0-9]*) ms=timeout ;; esac
-  printf '%s\t%s\n' "$now" "$ms" >>"$ring"
+  if read -r rx tx iface <<EOF_BYTES
+$(fm_load_net_bytes)
+EOF_BYTES
+  then
+    [ -z "$iface" ] || counters=$(printf '\t%s\t%s' "$((rx + tx))" "$iface")
+  fi
+  printf '%s\t%s%s\n' "$now" "$ms" "$counters" >>"$ring"
   if [ "$(wc -l <"$ring" | tr -d '[:space:]')" -gt 700 ]; then
     tail -n 600 "$ring" >"$ring.tmp.$$" && mv -f "$ring.tmp.$$" "$ring"
     rm -f "$ring.tmp.$$" 2>/dev/null || true
@@ -231,36 +251,91 @@ fm_load_latency_probe() {
 }
 
 # fm_load_latency_read <shared-state> <now>: set FM_NET_RTT and FM_NET_BASE
-# (whole ms, or empty), FM_NET_OVER (rtt - base, or empty), and FM_NET_LEVEL
-# (header), from the latency ring.
+# (whole ms, or empty), FM_NET_OVER (rtt - base, or empty), FM_NET_KBS (this
+# machine's traffic over the reading, or empty), FM_NET_QUIET (1 when the
+# latency alone would reach the close line but the traffic is under
+# net_busy_kbs), FM_NET_SETTLING (1 when only the calm hold keeps the level
+# high), and FM_NET_LEVEL (header), from the latency ring.
 fm_load_latency_read() {
-  local shared=$1 now=$2 result
+  local shared=$1 now=$2 result sticky
   FM_NET_RTT=
   FM_NET_BASE=
   FM_NET_OVER=
-  result=$(awk -F '\t' -v now="$now" '
-    $1 !~ /^[0-9]+$/ { next }
+  FM_NET_KBS=
+  FM_NET_QUIET=0
+  FM_NET_SETTLING=0
+  result=$(awk -F '\t' -v now="$now" -v win="$FM_LOAD_NET_WINDOW" -v calm="$FM_NET_CALM_SECS" \
+    -v closems="$FM_LATENCY_CLOSE_MS" -v busy="$FM_NET_BUSY_KBS" '
+    $1 !~ /^[0-9]+$/ || $1 > now { next }
     now - $1 <= 3600 && $2 ~ /^[0-9]+$/ { ok[++n] = $2 + 0 }
-    now - $1 <= 60 { recent[++r] = ($2 ~ /^[0-9]+$/ ? $2 + 0 : 2000) }
-    function sortn(a, c,   i, j, t) { for (i = 2; i <= c; i++) { t = a[i]; for (j = i - 1; j >= 1 && a[j] > t; j--) a[j + 1] = a[j]; a[j + 1] = t } }
-    END {
-      base = ""; rtt = ""
-      if (n >= 5) { sortn(ok, n); idx = int((n - 1) * 0.2) + 1; base = ok[idx] }
-      if (r > 0) {
-        s = (r > 3 ? r - 2 : 1); c = 0
-        for (i = s; i <= r; i++) last[++c] = recent[i]
-        sortn(last, c); rtt = last[int((c + 1) / 2)]
+    now - $1 < calm + win {
+      m++; t[m] = $1 + 0; ms[m] = ($2 ~ /^[0-9]+$/ ? $2 + 0 : 2000)
+      by[m] = ($3 ~ /^[0-9]+$/ && $4 != "" ? $3 + 0 : -1); ifc[m] = $4
+    }
+    function sortn(a, c,   i, j, x) { for (i = 2; i <= c; i++) { x = a[i]; for (j = i - 1; j >= 1 && a[j] > x; j--) a[j + 1] = a[j]; a[j + 1] = x } }
+    # reading <end>: W_RTT (median ms) and W_KBS (KB/s) of the probes in
+    # (end - win, end], each empty when unmeasured.
+    function reading(end,   i, c, v, f, l) {
+      W_RTT = ""; W_KBS = ""; c = 0; f = 0; l = 0
+      for (i = 1; i <= m; i++) {
+        if (t[i] <= end - win || t[i] > end) continue
+        v[++c] = ms[i]
+        if (by[i] < 0) continue
+        if (!f) f = i
+        else if (ifc[i] == ifc[f]) l = i
       }
-      print base "\t" rtt
+      if (c > 0) { sortn(v, c); W_RTT = v[int((c + 1) / 2)] }
+      if (f && l && t[l] - t[f] >= win / 2 && by[l] >= by[f]) W_KBS = int((by[l] - by[f]) / 1024 / (t[l] - t[f]))
+    }
+    function overloaded() { return W_RTT != "" && W_KBS != "" && W_RTT - base >= closems && W_KBS >= busy }
+    END {
+      base = ""; sticky = 0
+      if (n >= 5) { sortn(ok, n); base = ok[int((n - 1) * 0.2) + 1] }
+      if (base != "") for (i = 1; i <= m; i++) if (now - t[i] < calm) { reading(t[i]); if (overloaded()) sticky = 1 }
+      reading(now)
+      print base "|" W_RTT "|" W_KBS "|" sticky
     }
   ' "$shared/.net-latency" 2>/dev/null)
-  FM_NET_BASE=${result%%$'\t'*}
-  FM_NET_RTT=${result#*$'\t'}
+  IFS='|' read -r FM_NET_BASE FM_NET_RTT FM_NET_KBS sticky <<EOF_READING
+$result
+EOF_READING
   if [ -n "$FM_NET_BASE" ] && [ -n "$FM_NET_RTT" ]; then
     FM_NET_OVER=$((FM_NET_RTT - FM_NET_BASE))
     [ "$FM_NET_OVER" -ge 0 ] || FM_NET_OVER=0
   fi
   FM_NET_LEVEL=$(fm_load_level "$FM_NET_OVER" "$FM_LATENCY_REOPEN_MS" "$FM_LATENCY_CLOSE_MS" "$FM_LATENCY_CRITICAL_MS")
+  [ "$FM_NET_LEVEL" != unknown ] || return 0
+  if [ -z "$FM_NET_KBS" ] || [ "$FM_NET_KBS" -lt "$FM_NET_BUSY_KBS" ]; then
+    case "$FM_NET_LEVEL" in high | critical) FM_NET_QUIET=1 ;; esac
+    FM_NET_LEVEL=low
+  fi
+  case "$FM_NET_LEVEL" in
+    low | mid)
+      if [ "${sticky:-0}" = 1 ]; then
+        FM_NET_LEVEL=high
+        FM_NET_SETTLING=1
+      fi
+      ;;
+  esac
+}
+
+# fm_load_net_bytes: print "rx tx interface" (byte counters) for the
+# measured interface (header), "all" naming every non-loopback interface
+# summed, or nothing without readable counters.
+fm_load_net_bytes() {
+  local iface counters
+  iface=$(fm_load_net_interface)
+  counters=$(awk -v want="$iface" '
+    NR > 2 {
+      line = $0; sub(/^[[:space:]]+/, "", line)
+      name = line; sub(/:.*/, "", name); sub(/^[^:]*:[[:space:]]*/, "", line)
+      split(line, f, " ")
+      if (want != "" ? name == want : name != "lo") { rx += f[1]; tx += f[9]; seen = 1 }
+    }
+    END { if (seen) printf "%.0f %.0f\n", rx, tx }
+  ' "$(fm_memory_proc_root)/net/dev" 2>/dev/null)
+  [ -n "$counters" ] || return 0
+  printf '%s %s\n' "$counters" "${iface:-all}"
 }
 
 # fm_load_net_interface: print the measured interface (header).
@@ -278,24 +353,14 @@ fm_load_net_interface() {
 # FM_NET_DOWN_KBS (whole KB/s since the previous call, or empty on the
 # first), remembering the counters in .watchdog-netdev.
 fm_load_net_rates() {
-  local state=$1 now=$2 proc counters rx tx pepoch prx ptx piface elapsed
-  proc=$(fm_memory_proc_root)
+  local state=$1 now=$2 rx tx pepoch prx ptx piface elapsed
   FM_NET_UP_KBS=
   FM_NET_DOWN_KBS=
-  FM_NET_IFACE=$(fm_load_net_interface)
-  counters=$(awk -v want="$FM_NET_IFACE" '
-    NR > 2 {
-      line = $0; sub(/^[[:space:]]+/, "", line)
-      name = line; sub(/:.*/, "", name); sub(/^[^:]*:[[:space:]]*/, "", line)
-      split(line, f, " ")
-      if (want != "" ? name == want : name != "lo") { rx += f[1]; tx += f[9]; seen = 1 }
-    }
-    END { if (seen) printf "%.0f %.0f\n", rx, tx }
-  ' "$proc/net/dev" 2>/dev/null)
-  [ -n "$counters" ] || return 0
-  rx=${counters% *}
-  tx=${counters#* }
-  [ -n "$FM_NET_IFACE" ] || FM_NET_IFACE=all
+  FM_NET_IFACE=
+  read -r rx tx FM_NET_IFACE <<EOF_BYTES
+$(fm_load_net_bytes)
+EOF_BYTES
+  [ -n "$FM_NET_IFACE" ] || return 0
   if [ -f "$state/.watchdog-netdev" ] && read -r pepoch prx ptx piface <"$state/.watchdog-netdev" &&
     [ "$piface" = "$FM_NET_IFACE" ]; then
     elapsed=$((now - pepoch))

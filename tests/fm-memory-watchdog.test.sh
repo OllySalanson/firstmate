@@ -115,14 +115,78 @@ set_cpu() {
   for i in $(seq 0 $((${3:-8} - 1))); do printf 'processor\t: %s\n\n' "$i" >>"$P/cpuinfo"; done
 }
 
-# set_latency <normal-ms> <current-ms>: twenty probes at the normal latency
-# over the last hour, then three recent ones at the current latency.
+# set_latency <normal-ms> <current-ms> [<kbs>]: twenty probes at the normal
+# latency over the last hour, then five over the last 49 s at the current
+# latency while this machine moves <kbs> KB/s (default 0).
 set_latency() {
   local now i
   now=$(date +%s)
   : >"$H/state/.net-latency"
   for i in $(seq 20 -1 1); do printf '%s\t%s\n' $((now - 120 * i - 60)) "$1" >>"$H/state/.net-latency"; done
-  for i in 3 2 1; do printf '%s\t%s\n' $((now - i)) "$2" >>"$H/state/.net-latency"; done
+  for i in 49 37 25 13 1; do
+    printf '%s\t%s\t%s\teth0\n' $((now - i)) "$2" $((5000000 + (49 - i) * ${3:-0} * 1024)) >>"$H/state/.net-latency"
+  done
+}
+
+# Recorded inputs from a phone-hotspot connection whose latency rose and
+# fell on its own while this machine was nearly idle (the capture's README).
+CAPTURE="$ROOT/tests/captures/watchdog-hotspot-2026-10-06"
+
+# feed <epoch> <ms|timeout> <interface-bytes> [<worker-pid> <worker-bytes>]:
+# one loop tick at <epoch> that harvests a probe answering <ms>, with this
+# machine's interface counter, and the worker's socket counter, at the given
+# totals; the gate record after it is appended to $H/gates.log.
+feed() {
+  mkdir -p "$P/net"
+  [ -f "$P/net/route" ] || printf 'Iface\tDestination\tGateway\neth0\t00000000\t0170A8C0\n' >"$P/net/route"
+  printf 'Inter-|   Receive\n face |bytes packets\n  eth0: %s 0 0 0 0 0 0 0 %s 0 0 0 0 0 0 0\n' \
+    $(($3 / 10)) $(($3 - $3 / 10)) >"$P/net/dev"
+  if [ "$2" = timeout ]; then
+    echo "1 packets transmitted, 0 received" >"$H/state/.net-probe.out"
+  else
+    printf '64 bytes from 1.1.1.1: icmp_seq=1 ttl=55 time=%s ms\n' "$2" >"$H/state/.net-probe.out"
+  fi
+  if [ -n "${4:-}" ]; then
+    printf '0 0 172.17.0.2:40000 104.16.0.1:443 users:(("curl",pid=%s,fd=3))\n\t cubic bytes_acked:%s bytes_received:0\n' "$4" "$5" >"$H/ss.out"
+  fi
+  # A pinned clock never starts a real probe: the next answer is fed instead.
+  printf '9999999999\n' >"$H/state/.net-probe-last"
+  FM_WATCHDOG_NOW=$1 wd tick
+  printf '%s %s\n' "$1" "$(cat "$H/state/.net-gate" 2>/dev/null)" >>"$H/gates.log"
+}
+
+# replay <from> <to> <stride> <extra-kbs> [<worker-pid> <worker-kbs>]: the
+# capture's probes in order, each with this machine's interface counter
+# integrated from the recorded traffic plus <extra-kbs> KB/s; probes before
+# <from> go straight into the ring, then up to <to> every <stride>th probe is
+# fed as one tick and the rest go straight into the ring, the worker's socket
+# carrying <worker-kbs> KB/s since <from>. Every probe still ends a reading
+# the calm hold re-checks, so an overloaded reading between ticks closes the
+# gate at the next tick.
+replay() {
+  local from=$1 to=$2 stride=$3 extra=$4 pid=${5:-} wkbs=${6:-0} t ms bytes k=0
+  : >"$H/state/.net-latency"
+  : >"$H/gates.log"
+  while IFS=$'\t' read -r t ms bytes; do
+    [ "$t" -le "$to" ] || break
+    [ "$t" -lt "$from" ] || k=$((k + 1))
+    if [ "$t" -lt "$from" ] || [ $((k % stride)) != 0 ]; then
+      printf '%s\t%s\t%s\teth0\n' "$t" "$ms" "$bytes" >>"$H/state/.net-latency"
+    elif [ -n "$pid" ]; then
+      feed "$t" "$ms" "$bytes" "$pid" $(((t - from) * wkbs * 1024))
+    else
+      feed "$t" "$ms" "$bytes"
+    fi
+  done < <(awk -F '\t' -v extra="$extra" '
+    # Each traffic sample is the rate since the previous one.
+    NR == FNR { e[++n] = $1; r[n] = $2 + $3 + extra; next }
+    {
+      while (k < n && e[k + 1] < $1) k++
+      if (prev != "") bytes += r[k < n ? k + 1 : n] * 1024 * ($1 - prev)
+      prev = $1
+      printf "%s\t%s\t%.0f\n", $1, $2, 4000000000 + bytes
+    }
+  ' "$CAPTURE/traffic.tsv" "$CAPTURE/latency.tsv")
 }
 
 set_ticks() {  # <pid> <cpu-ticks>: the process's utime in its fake stat
@@ -561,6 +625,37 @@ test_browser_ceiling_stops_a_ballooning_browser_alone() {
   pass "one browser tree over its ceiling is stopped early, alone, even while total memory is fine"
 }
 
+test_a_worktree_two_records_name_belongs_to_its_live_worker() {
+  local wt="$TMP_ROOT/sharedwt/slot6" agent browser sent
+  new_case sharedwt
+  set_mem 40
+  mkdir -p "$wt"
+  # A dead task's record still names the pool slot a live task now runs in;
+  # the dead one sorts first and, here, looks the more recently spawned.
+  fm_write_meta "$H/state/map-maker.meta" "window=fm:map-maker" "worktree=$wt" "kind=ship" "harness=claude" "spawn_gen=s1790000200.1.2"
+  fm_write_meta "$H/state/playtest.meta" "window=fm:playtest" "worktree=$wt" "kind=scout" "harness=claude" "spawn_gen=s1790000100.1.2"
+  sleeper; agent=$LAST_SLEEPER
+  sleeper; browser=$LAST_SLEEPER
+  fake_proc "$agent" 1 1000 "$wt" claude --dangerously-skip-permissions
+  printf 'PATH=/usr/bin\0FM_TASK_ID=playtest\0' >"$P/$agent/environ"
+  fake_proc "$browser" "$agent" $((2 * GB)) "$wt" chromium --headless
+  wd tick
+  sleep 0.3
+  kill -0 "$browser" 2>/dev/null && fail "the ballooning browser in the shared worktree survived"
+  sent=$(cat "$H/sent.log")
+  assert_contains "$sent" "playtest"$'\t'"Memory watchdog: your headless browser grew" "the live worker was not told its browser was stopped"
+  assert_not_contains "$sent" "map-maker" "the dead task's record was charged with the live worker's browser"
+  assert_contains "$(wd poll)" "job ceiling: stopped playtest's headless browser" "firstmate was told the wrong task's browser was stopped"
+  # Without a worker naming itself there, the most recently spawned record owns it.
+  rm -f "$P/$agent/environ" "$H/sent.log"
+  sleeper; browser=$LAST_SLEEPER
+  fake_proc "$browser" "$agent" $((2 * GB)) "$wt" chromium --headless
+  wd tick
+  sleep 0.3
+  assert_contains "$(cat "$H/sent.log")" "map-maker"$'\t'"Memory watchdog: your headless browser grew" "the most recently spawned record did not own the worktree"
+  pass "a worktree a stale record and a live worker's record both name is charged to the worker running there, else to the newest record"
+}
+
 test_job_ceiling_stops_an_oversized_test_run() {
   local wt="$TMP_ROOT/jobceiling/wt" vit ok
   new_case jobceiling
@@ -609,17 +704,23 @@ test_connection_gate_follows_latency_above_normal() {
   local out rc
   new_case netgate
   set_mem 40
-  set_latency 40 160
+  # Raised latency while this machine is nearly idle is the connection itself.
+  set_latency 40 900 12
   wd tick
-  assert_contains "$(wd status)" "connection gate: closed - latency to 1.1.1.1 160 ms against a normal 40 ms" "status did not show the closed connection gate"
+  out=$(wd status)
+  assert_contains "$out" "connection gate: open - latency to 1.1.1.1 900 ms against a normal 40 ms while this machine moves only 12 KB/s, too little to be overloading it, so the connection itself is slow" "high latency on a nearly idle machine closed the gate"
+  wd admit n0 || fail "high latency on a nearly idle machine deferred a spawn"
+  set_latency 40 160 800
+  wd tick
+  assert_contains "$(wd status)" "connection gate: closed - latency to 1.1.1.1 160 ms against a normal 40 ms while this machine moves 800 KB/s" "status did not show the closed connection gate"
   out=$(wd admit n1 2>&1)
   rc=$?
   expect_code 75 "$rc" "admission while latency is 120 ms above normal"
   assert_contains "$out" "the connection gate is closed (latency to 1.1.1.1 160 ms against a normal 40 ms" "the deferral did not name the latency"
-  set_latency 40 90
+  set_latency 40 90 800
   wd tick
   assert_contains "$(wd status)" "connection gate: closed" "the connection gate reopened between its lines"
-  set_latency 40 60
+  set_latency 40 60 800
   wd tick
   wd admit n1 || fail "the connection gate did not reopen under its reopen line"
   # Only the loop maintains this gate, so admission ignores a record it stopped refreshing.
@@ -630,12 +731,15 @@ test_connection_gate_follows_latency_above_normal() {
   printf '%s\t900\n' "$(date +%s)" >"$H/state/.net-latency"
   wd tick
   assert_contains "$(wd status)" "connection gate: open - latency to 1.1.1.1 900 ms, normal latency not learned yet" "an unknown normal latency closed the gate"
-  pass "latency well above its normal level closes the connection gate, with hysteresis, and an unmaintained or unlearned reading never blocks work"
+  pass "latency well above its normal level closes the connection gate only while this machine is busy on it, with hysteresis, and an unmaintained or unlearned reading never blocks work"
 }
 
 test_latency_probe_is_harvested_by_the_next_tick() {
   new_case probe
   set_mem 40
+  mkdir -p "$P/net"
+  printf 'Iface\tDestination\tGateway\neth0\t00000000\t0170A8C0\n' >"$P/net/route"
+  printf 'Inter-|   Receive\n face |bytes packets\n  eth0: 7000 0 0 0 0 0 0 0 3000 0 0 0 0 0 0 0\n' >"$P/net/dev"
   printf '37.6\n' >"$H/ping-ms"
   FM_WATCHDOG_PROBE_EVERY=1 wd tick
   for _ in $(seq 1 25); do
@@ -643,7 +747,7 @@ test_latency_probe_is_harvested_by_the_next_tick() {
     sleep 0.2
   done
   FM_WATCHDOG_PROBE_EVERY=1 wd tick
-  assert_contains "$(cat "$H/state/.net-latency")" $'\t38' "a probe's latency was not recorded"
+  assert_contains "$(cat "$H/state/.net-latency")" $'\t38\t10000\teth0' "a probe's latency and this machine's byte counter were not recorded"
   rm -f "$H/ping-ms"
   sleep 1.1
   FM_WATCHDOG_PROBE_EVERY=1 wd tick
@@ -653,7 +757,7 @@ test_latency_probe_is_harvested_by_the_next_tick() {
   done
   FM_WATCHDOG_PROBE_EVERY=1 wd tick
   assert_contains "$(cat "$H/state/.net-latency")" $'\ttimeout' "a failed probe was not recorded as a timeout"
-  pass "the background latency probe is recorded by the next tick, and a lost probe counts as a timeout"
+  pass "the background latency probe is recorded by the next tick with this machine's byte counter, and a lost probe counts as a timeout"
 }
 
 # throttle_case <name> <task>: a task whose worker agent runs one command
@@ -733,20 +837,20 @@ test_connection_throttle_pauses_the_heaviest_traffic_only() {
     } >"$H/ss.out"
   }
   write_ss 0 0
-  set_latency 40 400
+  set_latency 40 400 800
   FM_WATCHDOG_SAMPLE=1 wd tick
   sleep 1.1
   write_ss 4000000 400000
-  set_latency 40 400
+  set_latency 40 400 800
   FM_WATCHDOG_SAMPLE=1 FM_WATCHDOG_PAUSE_SECS=1 FM_WATCHDOG_RUN_SECS=1 wd tick
   assert_equals T "$(proc_state "$busy_cmd")" "the worker carrying the most traffic was not paused"
   assert_equals S "$(proc_state "$busy_agent")" "the busy worker's agent itself was paused"
   assert_equals S "$(proc_state "$light_cmd")" "a worker carrying less traffic was paused"
-  assert_contains "$(cat "$H/sent.log")" "busy"$'\t'"Watchdog: the internet connection has been overloaded for 1 seconds (latency to 1.1.1.1 400 ms against a normal 40 ms), and your work carries the most traffic" "the busy worker was not told"
-  assert_contains "$(wd poll)" "connection critical: overloaded for 1s (latency to 1.1.1.1 400 ms against a normal 40 ms), so the watchdog is pausing busy's commands" "firstmate was not told"
+  assert_contains "$(cat "$H/sent.log")" "busy"$'\t'"Watchdog: the internet connection has been overloaded for 1 seconds (latency to 1.1.1.1 400 ms against a normal 40 ms while this machine moves 800 KB/s), and your work carries the most traffic" "the busy worker was not told"
+  assert_contains "$(wd poll)" "connection critical: overloaded for 1s (latency to 1.1.1.1 400 ms against a normal 40 ms while this machine moves 800 KB/s), so the watchdog is pausing busy's commands" "firstmate was not told"
   assert_contains "$(tail -n 1 "$H/state/watchdog-history")" "topnet=busy:" "the history did not record the heaviest traffic"
   sleep 1.1
-  set_latency 40 45
+  set_latency 40 45 800
   FM_WATCHDOG_SAMPLE=1 FM_WATCHDOG_PAUSE_SECS=1 FM_WATCHDOG_RUN_SECS=1 wd tick
   assert_equals S "$(proc_state "$busy_cmd")" "a paused command was not continued"
   sleep 1.1
@@ -772,6 +876,95 @@ test_overload_from_elsewhere_reports_once() {
   assert_contains "$out" "no worker of this home is using enough of it to throttle" "the report did not say the load comes from elsewhere"
   case "$out" in *";"*) fail "the overload from elsewhere was reported twice: $out" ;; esac
   pass "a processor overload no worker of this home causes is reported once per episode and throttles nothing"
+}
+
+# The capture's episode: 01:03:00 to 01:43:30 BST on 6 Oct 2026.
+HOTSPOT_FROM=1791244980
+HOTSPOT_TO=1791247410
+
+test_hotspot_latency_on_an_idle_machine_never_alarms() {
+  local out light_cmd peak
+  new_case hotspot
+  set_mem 40
+  # A worker carrying a little traffic, as one did that night.
+  throttle_case hotspot light
+  light_cmd=$CMD
+  replay "$HOTSPOT_FROM" "$HOTSPOT_TO" 8 0 "$light_cmd" 40
+  peak=$(awk -F '\t' '{ for (i = 2; i <= NF; i++) { if ($i ~ /^rtt=[0-9]/) r = substr($i, 5) + 0; if ($i ~ /^base=[0-9]/) b = substr($i, 6) + 0 } if (r - b > p) p = r - b } END { print p + 0 }' "$H/state/watchdog-history")
+  [ "$peak" -ge 600 ] || fail "the replay never reached a critical latency (peak ${peak} ms above normal), so it proves nothing"
+  assert_no_grep "closed" "$H/gates.log" "the connection gate closed while this machine was nearly idle"
+  [ ! -s "$H/sent.log" ] || fail "a worker was told to slow down over the connection: $(cat "$H/sent.log")"
+  assert_equals S "$(proc_state "$light_cmd")" "the light worker's command was paused"
+  out=$(FM_WATCHDOG_NOW="$HOTSPOT_TO" wd poll)
+  assert_not_contains "$out" "connection critical" "an idle machine on a slow connection raised a connection alarm"
+  # 01:40:58, with latency near its worst.
+  out=$(FM_WATCHDOG_NOW=1791247258 wd status)
+  assert_contains "$out" "connection gate: open - latency to 1.1.1.1 " "status did not show the open connection gate"
+  assert_contains "$out" "too little to be overloading it, so the connection itself is slow" "status did not say why high latency was not counted"
+  pass "the recorded hotspot latency of 300-2000 ms with this machine nearly idle neither closes the connection gate, alarms, nor throttles a worker"
+}
+
+test_the_same_latency_with_heavy_traffic_is_overload() {
+  local out heavy_cmd
+  new_case hotspotbusy
+  set_mem 40
+  throttle_case hotspotbusy heavy
+  heavy_cmd=$CMD
+  # Only the traffic differs from the idle replay: a worker moving 800 KB/s.
+  # 01:06:00 to 01:08:10, a probe per tick.
+  replay 1791245160 1791245290 1 800 "$heavy_cmd" 800
+  assert_grep "closed" "$H/gates.log" "the connection gate stayed open through a real overload"
+  out=$(FM_WATCHDOG_NOW=1791245290 wd poll)
+  assert_contains "$out" "connection critical: overloaded for 30s (latency to 1.1.1.1 " "the overload was not reported"
+  assert_contains "$out" "while this machine moves " "the report did not name this machine's traffic"
+  assert_contains "$out" "so the watchdog is pausing heavy's commands" "the heavy worker was not throttled"
+  assert_contains "$(cat "$H/sent.log")" "heavy"$'\t'"Watchdog: the internet connection has been overloaded" "the heavy worker was not told"
+  pass "the same recorded latency while a worker moves 800 KB/s still closes the gate and throttles that worker"
+}
+
+test_connection_overload_is_one_episode_until_calm() {
+  local t i n bytes=4000000000 wbytes=0 out phase ms kbs closed_at='' w_cmd
+  new_case netcalm
+  set_mem 40
+  printf 'critical_secs=12\nnet_calm_secs=120\n' >"$H/config/memory-gate"
+  throttle_case netcalm w
+  w_cmd=$CMD
+  t=1790000000
+  for i in $(seq 1 10); do printf '%s\t40\n' $((t - 3600 + i * 300)) >>"$H/state/.net-latency"; done
+  : >"$H/gates.log"
+  # Overloads of 90 s with one-minute calms between them, a probe every 15 s.
+  for phase in over calm over calm over; do
+    case "$phase" in
+      over) ms=400 kbs=800 n=6 ;;
+      *) ms=45 kbs=20 n=4 ;;
+    esac
+    for i in $(seq 1 "$n"); do
+      t=$((t + 15))
+      bytes=$((bytes + kbs * 15 * 1024))
+      [ "$phase" = calm ] || wbytes=$((wbytes + kbs * 15 * 1024))
+      feed "$t" "$ms" "$bytes" "$w_cmd" "$wbytes"
+      [ -n "$closed_at" ] || ! grep -q closed "$H/state/.net-gate" || closed_at=$t
+    done
+  done
+  [ -n "$closed_at" ] || fail "the overload never closed the connection gate"
+  out=$(FM_WATCHDOG_NOW=$t wd poll)
+  assert_equals 1 "$(printf '%s\n' "$out" | grep -o 'connection critical' | wc -l | tr -d ' ')" "one overload with dips was reported more than once: $out"
+  assert_not_contains "$out" "connection recovered" "the throttle was released during a short calm"
+  assert_equals 1 "$(grep -c 'has been overloaded' "$H/sent.log")" "the worker was told about one overload more than once"
+  awk -v from="$closed_at" '$1 >= from && $2 != "closed" { exit 1 }' "$H/gates.log" || fail "the connection gate reopened during a short calm: $(cat "$H/gates.log")"
+  # A long calm ends the episode once net_calm_secs pass.
+  for i in $(seq 1 14); do
+    t=$((t + 15))
+    bytes=$((bytes + 20 * 15 * 1024))
+    feed "$t" 45 "$bytes" "$w_cmd" "$wbytes"
+  done
+  assert_equals open "$(cut -d' ' -f1 "$H/state/.net-gate")" "the connection gate did not reopen after a long calm"
+  assert_absent "$H/state/.watchdog-throttle-net" "the throttle outlived a long calm"
+  out=$(FM_WATCHDOG_NOW=$t wd poll)
+  assert_contains "$out" "connection recovered: the watchdog stopped throttling w" "firstmate was not told the episode ended"
+  assert_not_contains "$out" "connection critical" "the long calm raised a new alarm"
+  assert_equals S "$(proc_state "$w_cmd")" "the worker's command stayed paused after the episode ended"
+  pass "an overload that dips for a minute at a time is one episode: one alarm, the gate closed, and one release only after net_calm_secs of calm"
 }
 
 test_poll_continues_commands_a_dead_loop_left_paused() {
@@ -899,6 +1092,7 @@ test_critical_stops_largest_heavy_job_only
 test_critical_skips_subtree_holding_an_agent
 test_critical_with_nothing_to_stop_reports_once
 test_browser_ceiling_stops_a_ballooning_browser_alone
+test_a_worktree_two_records_name_belongs_to_its_live_worker
 test_job_ceiling_stops_an_oversized_test_run
 test_room_event_for_deferred_work
 test_queue_orders_flagship_first
@@ -914,6 +1108,9 @@ test_latency_probe_is_harvested_by_the_next_tick
 test_processor_throttle_lowers_priority_then_pauses_then_releases
 test_connection_throttle_pauses_the_heaviest_traffic_only
 test_overload_from_elsewhere_reports_once
+test_hotspot_latency_on_an_idle_machine_never_alarms
+test_the_same_latency_with_heavy_traffic_is_overload
+test_connection_overload_is_one_episode_until_calm
 test_poll_continues_commands_a_dead_loop_left_paused
 test_history_explains_a_window
 test_history_window_may_run_past_now

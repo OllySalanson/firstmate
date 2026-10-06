@@ -87,9 +87,11 @@
 #     and release once the reading falls under the close line; tell the
 #     worker through bin/fm-send.sh and record an event at each step. With
 #     nothing of this home's using enough of it, record one event per
-#     episode. Every exit of the loop, and every poll that finds a pause
-#     overdue by 30 s, continues paused commands, so a dead loop never leaves
-#     them stopped.
+#     episode, which lasts while the reading stays at or past the close line
+#     (bin/fm-load-lib.sh's header owns when the connection reads overloaded,
+#     including its calm hold). Every exit of the loop, and every poll that
+#     finds a pause overdue by 30 s, continues paused commands, so a dead loop
+#     never leaves them stopped.
 #   - room: when deferred work exists, one more worker fits, and the
 #     processor and connection gates are open, record a room event,
 #     repeating at most every FM_MEMORY_ROOM_RENOTIFY seconds (default 600)
@@ -110,7 +112,8 @@
 # ("task<TAB>stage<TAB>until<TAB>since<TAB>root pids<TAB>stopped pid:start
 # words"), .watchdog-<cpu|net>-critical-since, and .watchdog-<cpu|net>-quiet.
 #
-# FM_MEMORY_SEND_CMD replaces bin/fm-send.sh for the worker notice (tests only).
+# FM_MEMORY_SEND_CMD replaces bin/fm-send.sh for the worker notice, and
+# FM_WATCHDOG_NOW pins the clock to an epoch (tests only).
 # FM_WATCHDOG_PROBE_EVERY, FM_WATCHDOG_NET_GATE_STALE, FM_WATCHDOG_PING_CMD, and
 # FM_WATCHDOG_SS_CMD are bin/fm-load-lib.sh's (its header).
 # FM_MEMORY_WATCHDOG_DISABLE=1 turns admit, poll, ensure, loop, and tick into
@@ -171,7 +174,7 @@ CPU_MIN_CENTICORES=50
 NET_MIN_KBS=32
 
 now_epoch() {
-  date +%s
+  printf '%s\n' "${FM_WATCHDOG_NOW:-$(date +%s)}"
 }
 
 SHARED=$(fm_memory_shared_state "$FM_HOME" "$STATE")
@@ -211,7 +214,7 @@ gate_line() {  # after fm_memory_sample + fm_memory_gate_update
 load_sample() {
   local now=$1
   FM_CPU_PSI='' FM_CPU_PSI_PCT='' FM_CPU_LOAD='' FM_CPU_LOAD_PCT=''
-  FM_NET_RTT='' FM_NET_BASE='' FM_NET_OVER=''
+  FM_NET_RTT='' FM_NET_BASE='' FM_NET_OVER='' FM_NET_KBS='' FM_NET_QUIET=0 FM_NET_SETTLING=0
   FM_CPU_CORES=$(fm_load_nproc)
   FM_CPU_LEVEL=off
   FM_NET_LEVEL=off
@@ -239,6 +242,14 @@ cpu_desc() {  # the processor reading in words
 net_desc() {  # the connection reading in words
   if [ -n "$FM_NET_RTT" ] && [ -n "$FM_NET_BASE" ]; then
     printf 'latency to %s %s ms against a normal %s ms' "$FM_LATENCY_HOST" "$FM_NET_RTT" "$FM_NET_BASE"
+    if [ -z "$FM_NET_KBS" ]; then
+      printf ', this machine'"'"'s traffic not measured yet'
+    elif [ "$FM_NET_QUIET" = 1 ]; then
+      printf ' while this machine moves only %s KB/s, too little to be overloading it, so the connection itself is slow' "$FM_NET_KBS"
+    else
+      printf ' while this machine moves %s KB/s' "$FM_NET_KBS"
+    fi
+    [ "$FM_NET_SETTLING" = 0 ] || printf ', settling after an overload in the last %ss' "$FM_NET_CALM_SECS"
   elif [ -n "$FM_NET_RTT" ]; then
     printf 'latency to %s %s ms, normal latency not learned yet' "$FM_LATENCY_HOST" "$FM_NET_RTT"
   else
@@ -300,8 +311,8 @@ cmd_status() {
     "$FM_MEMORY_BROWSER_CEILING_MB" "$FM_MEMORY_JOB_CEILING_MB"
   printf 'processor lines: closes at pressure %s%% or load %s%% of cores, reopens below %s%% and %s%%, throttles after %ss at %s%% or %s%%\n' \
     "$FM_CPU_CLOSE" "$FM_LOAD_CLOSE" "$FM_CPU_REOPEN" "$FM_LOAD_REOPEN" "$FM_CRITICAL_SECS" "$FM_CPU_CRITICAL" "$FM_LOAD_CRITICAL"
-  printf 'connection lines: closes at %s ms above normal latency, reopens below %s ms above, throttles after %ss at %s ms above\n' \
-    "$FM_LATENCY_CLOSE_MS" "$FM_LATENCY_REOPEN_MS" "$FM_CRITICAL_SECS" "$FM_LATENCY_CRITICAL_MS"
+  printf 'connection lines: closes at %s ms above normal latency while this machine moves at least %s KB/s, reopens below %s ms above or under %s KB/s once %ss pass without such an overload, throttles after %ss at %s ms above\n' \
+    "$FM_LATENCY_CLOSE_MS" "$FM_NET_BUSY_KBS" "$FM_LATENCY_REOPEN_MS" "$FM_NET_BUSY_KBS" "$FM_NET_CALM_SECS" "$FM_CRITICAL_SECS" "$FM_LATENCY_CRITICAL_MS"
   status_throttle_lines
   flagship=$(fm_memory_flagship "$CONFIG")
   printf 'flagship: %s\n' "${flagship:-none (set with bin/fm-memory-watchdog.sh flagship <project>)}"
@@ -744,8 +755,8 @@ cmd_admit() {
     printf 'deferred: %s stays queued - the processor gate is closed (%s; it closes at pressure %s%% or load %s%% of cores and reopens below %s%% and %s%%). The watchdog notifies firstmate when room frees; bin/fm-memory-watchdog.sh status shows the gates. Pass --memory-override only for a spawn the captain explicitly directed.\n' \
       "$task" "$(cpu_desc)" "$FM_CPU_CLOSE" "$FM_LOAD_CLOSE" "$FM_CPU_REOPEN" "$FM_LOAD_REOPEN" >&2
   elif fm_memory_room_for_one; then
-    printf 'deferred: %s stays queued - the connection gate is closed (%s; it closes at %s ms above normal and reopens below %s ms above). The watchdog notifies firstmate when room frees; bin/fm-memory-watchdog.sh status shows the gates. Pass --memory-override only for a spawn the captain explicitly directed.\n' \
-      "$task" "$(net_desc)" "$FM_LATENCY_CLOSE_MS" "$FM_LATENCY_REOPEN_MS" >&2
+    printf 'deferred: %s stays queued - the connection gate is closed (%s; it closes at %s ms above normal while this machine moves at least %s KB/s and reopens below %s ms above or under %s KB/s once %ss pass without such an overload). The watchdog notifies firstmate when room frees; bin/fm-memory-watchdog.sh status shows the gates. Pass --memory-override only for a spawn the captain explicitly directed.\n' \
+      "$task" "$(net_desc)" "$FM_LATENCY_CLOSE_MS" "$FM_NET_BUSY_KBS" "$FM_LATENCY_REOPEN_MS" "$FM_NET_BUSY_KBS" "$FM_NET_CALM_SECS" >&2
   elif [ "$FM_MEM_GATE" = closed ]; then
     printf 'deferred: %s stays queued - the memory gate is closed (%s%% of RAM in use, %s just-started worker(s) reserved, counted %s%%; it closed at %s%% and reopens below %s%%). The memory watchdog notifies firstmate when room frees; bin/fm-memory-watchdog.sh status shows the gate. Pass --memory-override only for a spawn the captain explicitly directed.\n' \
       "$task" "$FM_MEM_USED_PCT" "$FM_MEM_RESERVED_N" "$FM_MEM_COUNTED_PCT" "$FM_MEMORY_CLOSE" "$FM_MEMORY_REOPEN" >&2
@@ -997,8 +1008,11 @@ throttle_step() {
   if [ "$level" = critical ]; then
     [ -f "$since_f" ] || printf '%s\n' "$now" >"$since_f"
   else
-    rm -f "$since_f" "$STATE/.watchdog-$res-quiet"
+    rm -f "$since_f"
   fi
+  # One episode, one report from elsewhere: it lasts while the reading stays at
+  # or past the close line, which a brief dip under critical does not end.
+  case "$level" in high | critical) ;; *) rm -f "$STATE/.watchdog-$res-quiet" ;; esac
   if [ -f "$rec" ]; then
     IFS=$'\t' read -r task stage until since roots stopped <"$rec" || {
       rm -f "$rec"
