@@ -36,7 +36,10 @@
 # probes, a timeout counting as 2000 ms, and its traffic is the samples
 # ending in them, weighted by the seconds each covers, which need to cover
 # at least half the window: this machine's rate, and the workers' rate,
-# each home's averaged on its own and then summed. Normal latency is the
+# each home's averaged on its own and then summed, capped at this machine's
+# rate, since a worker's traffic to a local peer (a container on a bridge
+# network) never crosses the measured interface. Every home records under
+# the gate lock, so a trim never drops another home's sample. Normal latency is the
 # 20th percentile of the successful probes in the last hour, and needs at
 # least five of them. Without a normal figure the connection is "unknown",
 # which never closes the gate.
@@ -305,7 +308,7 @@ fm_load_latency_read() {
       }
       if (cover < win / 2) return
       for (h in wsum) w += wsum[h] / wcover[h]
-      W_WORK = int(w); W_ALL = int(all / cover)
+      W_ALL = int(all / cover); W_WORK = (w < W_ALL ? int(w) : W_ALL)
     }
     function counted() { return W_WORK != "" && W_WORK >= floor && W_WORK * 2 > W_ALL }
     function overloaded() { return W_RTT != "" && W_RTT - base >= closems && counted() }

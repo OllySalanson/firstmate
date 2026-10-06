@@ -953,9 +953,10 @@ analysis_sample() {
   topcpu=$(sort -t "$(printf '\t')" -k2,2nr "$top" 2>/dev/null | awk -F '\t' 'NR == 1 && $2 > 0 { printf "%s:%.2f", $1, $2 / 100 }')
   topnet=$(sort -t "$(printf '\t')" -k3,3nr "$top" 2>/dev/null | awk -F '\t' 'NR == 1 && $3 > 0 { printf "%s:%d", $1, $3 }')
   fm_load_net_rates "$STATE" "$now"
-  if [ "$FM_NET_ENABLED" = 1 ] && [ -n "$FM_NET_RATE_SECS" ] && [ -d "$SHARED" ]; then
+  if [ "$FM_NET_ENABLED" = 1 ] && [ -n "$FM_NET_RATE_SECS" ] && gate_lock; then
     fm_load_traffic_record "$SHARED" "$now" "$STATE" "$FM_NET_RATE_SECS" \
       "$(awk -F '\t' '{ s += $3 } END { print s + 0 }' "$top" 2>/dev/null || echo 0)" "$FM_NET_UP_KBS" "$FM_NET_DOWN_KBS"
+    fm_lock_release "$GATE_LOCK"
   fi
   for res in cpu net; do
     rec="$STATE/.watchdog-throttle-$res"

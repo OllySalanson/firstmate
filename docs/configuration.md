@@ -497,6 +497,7 @@ The connection gate watches round-trip latency to a stable host (default `1.1.1.
 Latency alone is not proof of an overload this machine causes: on a phone hotspot or a busy mobile cell, over weak Wi-Fi, or while another device or a Windows-side program downloads, latency rises and falls whatever WSL does, and holding back work cannot help.
 Nor is this machine's traffic alone: a streaming app or a Windows-side download moves as many bytes as a worker, and holding back workers cannot slow it.
 So a reading counts only while firstmate's ship and scout workers themselves carry at least `net_worker_kbs` (default 256 KB/s, about 2 megabits per second, enough to fill a hotspot's upload) and most of the traffic through this machine's network interface, over the same minute the reading covers, measured from the workers' own connections.
+Worker traffic counts only up to what the interface itself carried, so a worker's test suite talking to a local container does not count as using the internet.
 Otherwise raised latency is the connection itself or other programs, and status says so.
 It closes when current latency (the median of the probes from the last minute) reaches its close line above the connection's normal latency (default 80 ms above) while the workers carry that traffic.
 It reopens once latency falls below its reopen line (default 30 ms above) or the workers no longer carry that traffic, but only after `net_calm_secs` (default 300) have passed without such an overload reading, so one overload with short dips stays one episode instead of flapping.

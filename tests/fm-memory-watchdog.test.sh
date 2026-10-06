@@ -969,6 +969,31 @@ test_a_saturated_slow_uplink_is_overload() {
   pass "a worker filling a slow uplink at 300 KB/s while latency rises 400 ms counts as overload: the gate closes and that worker is throttled"
 }
 
+test_worker_traffic_to_a_local_peer_is_not_overload() {
+  local t i wbytes=0 out w_cmd
+  new_case localpeer
+  set_mem 40
+  throttle_case localpeer tester
+  w_cmd=$CMD
+  t=1790000000
+  for i in $(seq 1 10); do printf '%s\t45\n' $((t - 3600 + i * 300)) >>"$H/state/.net-latency"; done
+  : >"$H/gates.log"
+  # A worker's tests move 1 MB/s to a database container on the bridge
+  # network while the interface carries 20 KB/s and latency rises 400 ms.
+  for i in $(seq 1 20); do
+    t=$((t + 6))
+    wbytes=$((wbytes + 1024 * 6 * 1024))
+    printf '0 0 172.17.0.2:40000 172.17.0.3:5432 users:(("node",pid=%s,fd=3))\n\t cubic bytes_acked:%s bytes_received:0\n' "$w_cmd" "$wbytes" >"$H/ss.out"
+    feed "$t" 445 0 $((i * 20 * 6 * 1024))
+  done
+  assert_no_grep "closed" "$H/gates.log" "worker traffic to a local peer closed the connection gate"
+  [ ! -s "$H/sent.log" ] || fail "a worker was told to slow down for traffic that never left the machine: $(cat "$H/sent.log")"
+  assert_equals S "$(proc_state "$w_cmd")" "the worker's command was paused"
+  out=$(FM_WATCHDOG_NOW=$t wd poll)
+  assert_not_contains "$out" "connection critical" "worker traffic to a local peer raised a connection alarm"
+  pass "a worker moving 1 MB/s to a local container while the interface carries 20 KB/s does not count as connection overload"
+}
+
 test_connection_overload_is_one_episode_until_calm() {
   local t i n bytes=4000000000 wbytes=0 out phase ms kbs closed_at='' w_cmd
   new_case netcalm
@@ -1163,6 +1188,7 @@ test_hotspot_latency_on_an_idle_machine_never_alarms
 test_the_same_latency_with_other_programs_streaming_never_alarms
 test_the_same_latency_with_heavy_traffic_is_overload
 test_a_saturated_slow_uplink_is_overload
+test_worker_traffic_to_a_local_peer_is_not_overload
 test_connection_overload_is_one_episode_until_calm
 test_poll_continues_commands_a_dead_loop_left_paused
 test_history_explains_a_window
