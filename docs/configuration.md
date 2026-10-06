@@ -563,7 +563,7 @@ Values must satisfy `reopen < close < critical <= 100` for memory and for `cpu_*
 A malformed file makes every spawn refuse with the reason, while the watchdog loop keeps protecting on the defaults and reports the problem once.
 
 `bin/fm-memory-watchdog.sh status` prints each gate with its reading, reservations, every gate's lines, the job ceilings, any throttle, the flagship, deferred work, whether the watchdog loop is running, the history's extent, and its recent events.
-The gate records and latency probes are machine-wide, kept in the local root home's `state/`, so every home on one machine shares one set of gates; deferred work, events, history, and throttles stay in each home, and each home throttles only its own workers.
+The gate records, latency probes, and connection traffic samples are machine-wide, kept in the local root home's `state/`, so every home on one machine shares one set of gates; deferred work, events, history, and throttles stay in each home, and each home throttles only its own workers.
 The watchdog's detached loop is started and kept alive by the watcher and by each spawn, ticks every few seconds so it keeps protecting while the watcher waits for firstmate's next turn, and exits by itself once the home has no task records and no deferred work.
 The script's header owns the exact commands, records, and tuning variables.
 

@@ -105,9 +105,9 @@
 # .memory-critical-episode, memory-watchdog.events (appended and trimmed only
 # under .memory-watchdog.events.lock), .memory-watchdog.cursor, and the
 # .memory-watchdog.lock loop singleton. Processor and connection records
-# (same split): shared .cpu-gate, .net-gate, .net-latency, .net-probe-last,
-# .net-probe.out; per home watchdog-history and watchdog-history.1,
-# .watchdog-sample-last, .watchdog-top, .watchdog-cputicks,
+# (same split): shared .cpu-gate, .net-gate, .net-latency, .net-traffic,
+# .net-probe-last, .net-probe.out; per home watchdog-history and
+# watchdog-history.1, .watchdog-sample-last, .watchdog-top, .watchdog-cputicks,
 # .watchdog-sockets, .watchdog-netdev, .watchdog-throttle-<cpu|net>
 # ("task<TAB>stage<TAB>until<TAB>since<TAB>root pids<TAB>stopped pid:start
 # words"), .watchdog-<cpu|net>-critical-since, and .watchdog-<cpu|net>-quiet.
