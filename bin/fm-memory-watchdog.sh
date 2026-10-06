@@ -214,7 +214,7 @@ gate_line() {  # after fm_memory_sample + fm_memory_gate_update
 load_sample() {
   local now=$1
   FM_CPU_PSI='' FM_CPU_PSI_PCT='' FM_CPU_LOAD='' FM_CPU_LOAD_PCT=''
-  FM_NET_RTT='' FM_NET_BASE='' FM_NET_OVER='' FM_NET_SEND_KBS='' FM_NET_RECV_KBS='' FM_NET_QUIET=0 FM_NET_SETTLING=0
+  FM_NET_RTT='' FM_NET_BASE='' FM_NET_OVER='' FM_NET_WORK_KBS='' FM_NET_ALL_KBS='' FM_NET_QUIET=0 FM_NET_SETTLING=0
   FM_CPU_CORES=$(fm_load_nproc)
   FM_CPU_LEVEL=off
   FM_NET_LEVEL=off
@@ -242,12 +242,12 @@ cpu_desc() {  # the processor reading in words
 net_desc() {  # the connection reading in words
   if [ -n "$FM_NET_RTT" ] && [ -n "$FM_NET_BASE" ]; then
     printf 'latency to %s %s ms against a normal %s ms' "$FM_LATENCY_HOST" "$FM_NET_RTT" "$FM_NET_BASE"
-    if [ -z "$FM_NET_SEND_KBS" ]; then
+    if [ -z "$FM_NET_WORK_KBS" ]; then
       printf ', this machine'"'"'s traffic not measured yet'
     elif [ "$FM_NET_QUIET" = 1 ]; then
-      printf ' while this machine sends only %s KB/s and receives only %s KB/s, too little to be overloading it, so the connection itself is slow' "$FM_NET_SEND_KBS" "$FM_NET_RECV_KBS"
+      printf ' while firstmate'"'"'s workers carry only %s of this machine'"'"'s %s KB/s, too little to be overloading it, so the connection itself or other programs are slow' "$FM_NET_WORK_KBS" "$FM_NET_ALL_KBS"
     else
-      printf ' while this machine sends %s KB/s and receives %s KB/s' "$FM_NET_SEND_KBS" "$FM_NET_RECV_KBS"
+      printf ' while firstmate'"'"'s workers carry %s of this machine'"'"'s %s KB/s' "$FM_NET_WORK_KBS" "$FM_NET_ALL_KBS"
     fi
     [ "$FM_NET_SETTLING" = 0 ] || printf ', settling after an overload in the last %ss' "$FM_NET_CALM_SECS"
   elif [ -n "$FM_NET_RTT" ]; then
@@ -311,8 +311,8 @@ cmd_status() {
     "$FM_MEMORY_BROWSER_CEILING_MB" "$FM_MEMORY_JOB_CEILING_MB"
   printf 'processor lines: closes at pressure %s%% or load %s%% of cores, reopens below %s%% and %s%%, throttles after %ss at %s%% or %s%%\n' \
     "$FM_CPU_CLOSE" "$FM_LOAD_CLOSE" "$FM_CPU_REOPEN" "$FM_LOAD_REOPEN" "$FM_CRITICAL_SECS" "$FM_CPU_CRITICAL" "$FM_LOAD_CRITICAL"
-  printf 'connection lines: closes at %s ms above normal latency while this machine sends at least %s KB/s or receives at least %s KB/s, reopens below %s ms above or under both once %ss pass without such an overload, throttles after %ss at %s ms above\n' \
-    "$FM_LATENCY_CLOSE_MS" "$FM_NET_BUSY_UP_KBS" "$FM_NET_BUSY_DOWN_KBS" "$FM_LATENCY_REOPEN_MS" "$FM_NET_CALM_SECS" "$FM_CRITICAL_SECS" "$FM_LATENCY_CRITICAL_MS"
+  printf 'connection lines: closes at %s ms above normal latency while firstmate'"'"'s workers carry at least %s KB/s and most of this machine'"'"'s traffic, reopens below %s ms above or once they no longer do, after %ss pass without such an overload, throttles after %ss at %s ms above\n' \
+    "$FM_LATENCY_CLOSE_MS" "$FM_NET_WORKER_KBS" "$FM_LATENCY_REOPEN_MS" "$FM_NET_CALM_SECS" "$FM_CRITICAL_SECS" "$FM_LATENCY_CRITICAL_MS"
   status_throttle_lines
   flagship=$(fm_memory_flagship "$CONFIG")
   printf 'flagship: %s\n' "${flagship:-none (set with bin/fm-memory-watchdog.sh flagship <project>)}"
@@ -755,8 +755,8 @@ cmd_admit() {
     printf 'deferred: %s stays queued - the processor gate is closed (%s; it closes at pressure %s%% or load %s%% of cores and reopens below %s%% and %s%%). The watchdog notifies firstmate when room frees; bin/fm-memory-watchdog.sh status shows the gates. Pass --memory-override only for a spawn the captain explicitly directed.\n' \
       "$task" "$(cpu_desc)" "$FM_CPU_CLOSE" "$FM_LOAD_CLOSE" "$FM_CPU_REOPEN" "$FM_LOAD_REOPEN" >&2
   elif fm_memory_room_for_one; then
-    printf 'deferred: %s stays queued - the connection gate is closed (%s; it closes at %s ms above normal while this machine sends at least %s KB/s or receives at least %s KB/s and reopens below %s ms above or under both once %ss pass without such an overload). The watchdog notifies firstmate when room frees; bin/fm-memory-watchdog.sh status shows the gates. Pass --memory-override only for a spawn the captain explicitly directed.\n' \
-      "$task" "$(net_desc)" "$FM_LATENCY_CLOSE_MS" "$FM_NET_BUSY_UP_KBS" "$FM_NET_BUSY_DOWN_KBS" "$FM_LATENCY_REOPEN_MS" "$FM_NET_CALM_SECS" >&2
+    printf 'deferred: %s stays queued - the connection gate is closed (%s; it closes at %s ms above normal while firstmate'"'"'s workers carry at least %s KB/s and most of this machine'"'"'s traffic, and reopens below %s ms above or once they no longer do, after %ss pass without such an overload). The watchdog notifies firstmate when room frees; bin/fm-memory-watchdog.sh status shows the gates. Pass --memory-override only for a spawn the captain explicitly directed.\n' \
+      "$task" "$(net_desc)" "$FM_LATENCY_CLOSE_MS" "$FM_NET_WORKER_KBS" "$FM_LATENCY_REOPEN_MS" "$FM_NET_CALM_SECS" >&2
   elif [ "$FM_MEM_GATE" = closed ]; then
     printf 'deferred: %s stays queued - the memory gate is closed (%s%% of RAM in use, %s just-started worker(s) reserved, counted %s%%; it closed at %s%% and reopens below %s%%). The memory watchdog notifies firstmate when room frees; bin/fm-memory-watchdog.sh status shows the gate. Pass --memory-override only for a spawn the captain explicitly directed.\n' \
       "$task" "$FM_MEM_USED_PCT" "$FM_MEM_RESERVED_N" "$FM_MEM_COUNTED_PCT" "$FM_MEMORY_CLOSE" "$FM_MEMORY_REOPEN" >&2
@@ -953,6 +953,10 @@ analysis_sample() {
   topcpu=$(sort -t "$(printf '\t')" -k2,2nr "$top" 2>/dev/null | awk -F '\t' 'NR == 1 && $2 > 0 { printf "%s:%.2f", $1, $2 / 100 }')
   topnet=$(sort -t "$(printf '\t')" -k3,3nr "$top" 2>/dev/null | awk -F '\t' 'NR == 1 && $3 > 0 { printf "%s:%d", $1, $3 }')
   fm_load_net_rates "$STATE" "$now"
+  if [ "$FM_NET_ENABLED" = 1 ] && [ -n "$FM_NET_RATE_SECS" ] && [ -d "$SHARED" ]; then
+    fm_load_traffic_record "$SHARED" "$now" "$STATE" "$FM_NET_RATE_SECS" \
+      "$(awk -F '\t' '{ s += $3 } END { print s + 0 }' "$top" 2>/dev/null || echo 0)" "$FM_NET_UP_KBS" "$FM_NET_DOWN_KBS"
+  fi
   for res in cpu net; do
     rec="$STATE/.watchdog-throttle-$res"
     [ -f "$rec" ] || continue

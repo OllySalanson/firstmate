@@ -495,17 +495,17 @@ Without a pressure reading, load alone decides.
 
 The connection gate watches round-trip latency to a stable host (default `1.1.1.1`), probed in the background once every few seconds, because a saturated link shows first as queueing delay on every connection in the house.
 Latency alone is not proof of an overload this machine causes: on a phone hotspot or a busy mobile cell, over weak Wi-Fi, or while another device or a Windows-side program downloads, latency rises and falls whatever WSL does, and holding back work cannot help.
-So a reading counts only while this machine itself sends at least `net_busy_up_kbs` (default 256 KB/s, about 2 megabits per second) or receives at least `net_busy_down_kbs` (default 512 KB/s, about 4 megabits per second) through its network interface over the same minute the reading covers.
-Each direction is judged alone, because a hotspot's or home line's upload is often a fraction of its download, so a worker filling the upload still counts.
-Below both, raised latency is the connection itself, and status says so.
-It closes when current latency (the median of the probes from the last minute) reaches its close line above the connection's normal latency (default 80 ms above) while this machine is that busy.
-It reopens once latency falls below its reopen line (default 30 ms above) or the traffic falls under both floors, but only after `net_calm_secs` (default 300) have passed without such an overload reading, so one overload with short dips stays one episode instead of flapping.
+Nor is this machine's traffic alone: a streaming app or a Windows-side download moves as many bytes as a worker, and holding back workers cannot slow it.
+So a reading counts only while firstmate's ship and scout workers themselves carry at least `net_worker_kbs` (default 256 KB/s, about 2 megabits per second, enough to fill a hotspot's upload) and most of the traffic through this machine's network interface, over the same minute the reading covers, measured from the workers' own connections.
+Otherwise raised latency is the connection itself or other programs, and status says so.
+It closes when current latency (the median of the probes from the last minute) reaches its close line above the connection's normal latency (default 80 ms above) while the workers carry that traffic.
+It reopens once latency falls below its reopen line (default 30 ms above) or the workers no longer carry that traffic, but only after `net_calm_secs` (default 300) have passed without such an overload reading, so one overload with short dips stays one episode instead of flapping.
 Normal latency is learned from the last hour of probes, so until a few probes have succeeded, or when the host never answers, the connection never holds work back.
 Upload and download rates of the WSL network interface are also shown in status and recorded in the history.
 
 New spawns and relaunches are deferred while either gate is closed, exactly like a full memory gate, with a `deferred:` line naming the reading; the room notice waits for all three gates, and `--memory-override` admits past any of them.
 
-When the processor or the connection stays past its critical line (defaults: pressure 50% or load 115% of the cores; latency 200 ms above normal while this machine sends or receives at least its floor) for `critical_secs` (default 30 seconds), the watchdog throttles the worker of this home using the most of it, measured over its whole process tree, and tells that worker why through `bin/fm-send.sh`.
+When the processor or the connection stays past its critical line (defaults: pressure 50% or load 115% of the cores; latency 200 ms above normal while the workers carry that traffic) for `critical_secs` (default 30 seconds), the watchdog throttles the worker of this home using the most of it, measured over its whole process tree, and tells that worker why through `bin/fm-send.sh`.
 For the processor it first lowers the priority of the worker's agent and commands; if the processor is still critical after another `critical_secs`, it pauses the worker's commands (SIGSTOP) for ten seconds at a time with ten seconds of running in between (SIGCONT).
 For the connection it goes straight to pausing, since priority does not slow traffic.
 It releases once the reading falls back under its close line, which for the connection means once `net_calm_secs` pass without an overload reading, and tells the worker and firstmate at every step; lowered priority stays, because an unprivileged process cannot raise it again, and only matters while the machine is busy.
@@ -551,8 +551,7 @@ latency_reopen_ms=30    # latency above normal below which it can reopen
 latency_critical_ms=200 # latency above normal that starts the throttle clock
 latency_host=1.1.1.1    # the stable host the latency probe pings
 net_interface=eth0      # the interface whose traffic is measured; absent = the default route's
-net_busy_up_kbs=256     # KB/s this machine must send before raised latency counts as its overload
-net_busy_down_kbs=512   # KB/s this machine must receive before raised latency counts as its overload
+net_worker_kbs=256      # KB/s the workers must carry, and most of this machine's traffic, before raised latency counts as their overload
 net_calm_secs=300       # seconds without an overload reading before a connection overload ends
 critical_secs=30  # how long the processor or connection stays critical before a throttle step
 history_kb=1024   # size at which the sample history rotates

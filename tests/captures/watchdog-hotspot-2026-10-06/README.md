@@ -15,6 +15,7 @@ The watchdog then judged the connection on latency alone, so it held its connect
 The probes ran one every six to seven seconds, a single ping with a two-second limit.
 The ring had already trimmed the 101 entries before 00:56:08 when this capture was taken, so those come from a timestamped dump of the same ring taken at 01:57, which matched the live ring on all 556 entries both held.
 
-`traffic.tsv` holds the 220 samples of `state/watchdog-history` from 00:44:15 to 01:44:48, cut to three fields: the sample epoch, then the upload and download rates in KB/s of WSL's `eth0` over the interval since the previous sample.
+`traffic.tsv` holds the 220 samples of `state/watchdog-history` from 00:44:15 to 01:44:48, cut to four fields: the sample epoch, then the upload and download rates in KB/s of WSL's `eth0` over the interval since the previous sample, then the traffic in KB/s the busiest worker of the home carried over that interval (the sample's `topnet` figure, measured from that worker's own TCP connections), or `-` when no worker carried measurable traffic.
+One worker ran in the window, so that figure is all the traffic workers carried then.
 Every other field, including the names of the tasks running then, is left out.
-Those rates come from the interface's byte counters, so the test integrates them back into a counter for each probe; the reconstruction holds each sample's rate across its interval.
+Those rates come from byte counters, so the test integrates them back into the interface's counters and the worker's socket counter; the reconstruction holds each sample's rate across its interval.
