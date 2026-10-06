@@ -132,6 +132,18 @@ set_latency() {
   done
 }
 
+# set_route: eth0 on 192.168.112.0/20 with the default route through
+# 192.168.112.1, and a container bridge, docker0, on 172.17.0.0/16.
+set_route() {
+  mkdir -p "$P/net"
+  {
+    printf 'Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n'
+    printf 'eth0\t00000000\t0170A8C0\t0003\t0\t0\t0\t00000000\t0\t0\t0\n'
+    printf 'eth0\t0070A8C0\t00000000\t0001\t0\t0\t0\t00F0FFFF\t0\t0\t0\n'
+    printf 'docker0\t000011AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0\n'
+  } >"$P/net/route"
+}
+
 # Recorded inputs from a phone-hotspot connection whose latency rose and
 # fell on its own while this machine was nearly idle (the capture's README).
 CAPTURE="$ROOT/tests/captures/watchdog-hotspot-2026-10-06"
@@ -141,8 +153,7 @@ CAPTURE="$ROOT/tests/captures/watchdog-hotspot-2026-10-06"
 # machine's interface counters, and the worker's socket counter, at the given
 # totals; the gate record after it is appended to $H/gates.log.
 feed() {
-  mkdir -p "$P/net"
-  [ -f "$P/net/route" ] || printf 'Iface\tDestination\tGateway\neth0\t00000000\t0170A8C0\n' >"$P/net/route"
+  [ -f "$P/net/route" ] || set_route
   printf 'Inter-|   Receive\n face |bytes packets\n  eth0: %s 0 0 0 0 0 0 0 %s 0 0 0 0 0 0 0\n' "$3" "$4" >"$P/net/dev"
   if [ "$2" = timeout ]; then
     echo "1 packets transmitted, 0 received" >"$H/state/.net-probe.out"
@@ -830,6 +841,7 @@ test_connection_throttle_pauses_the_heaviest_traffic_only() {
   local busy_cmd busy_agent light_cmd
   new_case netthr
   set_mem 40
+  set_route
   printf 'critical_secs=1\n' >"$H/config/memory-gate"
   throttle_case netthr busy
   busy_cmd=$CMD busy_agent=$AGENT
@@ -979,19 +991,22 @@ test_worker_traffic_to_a_local_peer_is_not_overload() {
   for i in $(seq 1 10); do printf '%s\t45\n' $((t - 3600 + i * 300)) >>"$H/state/.net-latency"; done
   : >"$H/gates.log"
   # A worker's tests move 1 MB/s to a database container on the bridge
-  # network while the interface carries 20 KB/s and latency rises 400 ms.
+  # network while another program streams 400 KB/s through the interface
+  # and latency rises 400 ms above normal.
   for i in $(seq 1 20); do
     t=$((t + 6))
     wbytes=$((wbytes + 1024 * 6 * 1024))
-    printf '0 0 172.17.0.2:40000 172.17.0.3:5432 users:(("node",pid=%s,fd=3))\n\t cubic bytes_acked:%s bytes_received:0\n' "$w_cmd" "$wbytes" >"$H/ss.out"
-    feed "$t" 445 0 $((i * 20 * 6 * 1024))
+    printf '0 0 172.17.0.1:40000 172.17.0.3:5432 users:(("node",pid=%s,fd=3))\n\t cubic bytes_acked:%s bytes_received:0\n' "$w_cmd" "$wbytes" >"$H/ss.out"
+    feed "$t" 445 $((i * 400 * 6 * 1024)) 0
   done
   assert_no_grep "closed" "$H/gates.log" "worker traffic to a local peer closed the connection gate"
   [ ! -s "$H/sent.log" ] || fail "a worker was told to slow down for traffic that never left the machine: $(cat "$H/sent.log")"
   assert_equals S "$(proc_state "$w_cmd")" "the worker's command was paused"
   out=$(FM_WATCHDOG_NOW=$t wd poll)
   assert_not_contains "$out" "connection critical" "worker traffic to a local peer raised a connection alarm"
-  pass "a worker moving 1 MB/s to a local container while the interface carries 20 KB/s does not count as connection overload"
+  out=$(FM_WATCHDOG_NOW=$t wd status)
+  assert_contains "$out" "while firstmate's workers carry only 0 of this machine's 400 KB/s" "the local traffic was credited as internet traffic"
+  pass "a worker moving 1 MB/s to a local container while another program streams 400 KB/s does not count as connection overload"
 }
 
 test_connection_overload_is_one_episode_until_calm() {

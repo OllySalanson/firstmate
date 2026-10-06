@@ -36,9 +36,7 @@
 # probes, a timeout counting as 2000 ms, and its traffic is the samples
 # ending in them, weighted by the seconds each covers, which need to cover
 # at least half the window: this machine's rate, and the workers' rate,
-# each home's averaged on its own and then summed, capped at this machine's
-# rate, since a worker's traffic to a local peer (a container on a bridge
-# network) never crosses the measured interface. Every home records under
+# each home's averaged on its own and then summed. Every home records under
 # the gate lock, so a trim never drops another home's sample. Normal latency is the
 # 20th percentile of the successful probes in the last hour, and needs at
 # least five of them. Without a normal figure the connection is "unknown",
@@ -73,9 +71,12 @@
 # samples, so commands that already exited still count through the parent
 # that reaped them. Connection use is the TCP bytes acknowledged plus received
 # per socket from `ss -tinpH state established` (FM_WATCHDOG_SS_CMD replaces
-# it in tests), loopback peers excluded, between two samples, credited to the
-# tree owning the socket's first listed process; UDP traffic (QUIC) is not
-# attributed. Interface rates come from <proc>/net/dev for net_interface, else
+# it in tests), between two samples, credited to the tree owning the socket's
+# first listed process. Only internet traffic counts: an IPv4 peer whose most
+# specific route in <proc>/net/route leaves through a gateway on the measured
+# interface, or a global unicast IPv6 peer (2000::/3), so traffic to
+# loopback, a container on a bridge network, or any other directly connected
+# subnet is never attributed. UDP traffic (QUIC) is not attributed. Interface rates come from <proc>/net/dev for net_interface, else
 # the default route's interface in <proc>/net/route, else every non-loopback
 # interface summed.
 #
@@ -308,7 +309,7 @@ fm_load_latency_read() {
       }
       if (cover < win / 2) return
       for (h in wsum) w += wsum[h] / wcover[h]
-      W_ALL = int(all / cover); W_WORK = (w < W_ALL ? int(w) : W_ALL)
+      W_WORK = int(w); W_ALL = int(all / cover)
     }
     function counted() { return W_WORK != "" && W_WORK >= floor && W_WORK * 2 > W_ALL }
     function overloaded() { return W_RTT != "" && W_RTT - base >= closems && counted() }
@@ -504,15 +505,40 @@ fm_load_task_cpu() {
 }
 
 # fm_load_task_net <state-dir> <trees> <now>: print "task<TAB>KB/s" per task
-# (connection use since the previous call), remembering per-socket byte
-# counts in .watchdog-sockets.
+# (internet use since the previous call, header), remembering per-socket
+# byte counts in .watchdog-sockets.
 fm_load_task_net() {
-  local state=$1 trees=$2 now=$3 prev="$1/.watchdog-sockets" ss_out
+  local state=$1 trees=$2 now=$3 prev="$1/.watchdog-sockets" ss_out want
   # shellcheck disable=SC2086 # FM_WATCHDOG_SS_CMD is a command line.
   ss_out=$(${FM_WATCHDOG_SS_CMD:-ss -tinpH state established} 2>/dev/null) || ss_out=
   [ -n "$ss_out" ] || return 0
-  printf '%s\n' "$ss_out" | awk -v trees="$trees" -v prev="$prev" -v now="$now" -v out="$prev.tmp.$$" '
+  want=$(fm_load_net_interface)
+  printf '%s\n' "$ss_out" | awk -v trees="$trees" -v prev="$prev" -v now="$now" -v out="$prev.tmp.$$" \
+    -v routes="$(fm_memory_proc_root)/net/route" -v want="$want" '
+    function hex(s,   i, v) { v = 0; for (i = 1; i <= length(s); i++) v = v * 16 + index("0123456789abcdef", tolower(substr(s, i, 1))) - 1; return v }
+    # internet <peer>: 1 when traffic to the ss peer address:port leaves
+    # through the measured interface toward the internet (header).
+    function internet(peer,   a, o, r, i, ok, best) {
+      a = peer; sub(/:[^:]*$/, "", a); gsub(/[][]/, "", a); sub(/^::ffff:/, "", a)
+      if (a ~ /:/) return a ~ /^[23]/
+      if (a ~ /^127\./ || split(a, o, ".") != 4) return 0
+      best = 0
+      for (r = 1; r <= nr; r++) {
+        ok = 1
+        for (i = 1; i <= 4; i++) if (o[i] - o[i] % (256 - rm[r, i]) != rd[r, i]) ok = 0
+        if (ok && (!best || rmask[r] > rmask[best])) best = r
+      }
+      return best && rgw[best] && (want != "" ? rif[best] == want : rif[best] != "lo")
+    }
     BEGIN {
+      while ((getline l < routes) > 0) {
+        if (split(l, f, " ") < 8 || f[2] !~ /^[0-9A-Fa-f]+$/ || length(f[2]) != 8 || f[8] !~ /^[0-9A-Fa-f]+$/ || length(f[8]) != 8) continue
+        nr++; rif[nr] = f[1]; rgw[nr] = (hex(f[3]) != 0); rmask[nr] = 0
+        for (i = 1; i <= 4; i++) {
+          rd[nr, i] = hex(substr(f[2], 9 - 2 * i, 2)); rm[nr, i] = hex(substr(f[8], 9 - 2 * i, 2))
+          rmask[nr] = rmask[nr] * 256 + rm[nr, i]
+        }
+      }
       while ((getline l < trees) > 0) { split(l, f, "\t"); owner[f[2]] = f[1] }
       if ((getline l < prev) > 0) { pepoch = l + 0; have = 1 }
       while ((getline l < prev) > 0) { n = split(l, f, "\t"); pb[f[1]] = f[2] }
@@ -520,7 +546,7 @@ fm_load_task_net() {
     }
     /^[^[:space:]]/ {
       key = ""; pid = ""
-      if ($4 ~ /^(127\.|\[::1\]|\[::ffff:127\.)/) next
+      if (!internet($4)) next
       key = $3 " " $4
       if (match($0, /pid=[0-9]+/)) pid = substr($0, RSTART + 4, RLENGTH - 4)
       next
