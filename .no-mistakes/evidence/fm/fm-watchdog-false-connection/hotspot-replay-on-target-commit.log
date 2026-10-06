@@ -1,0 +1,20 @@
+--- peak latency above normal: 1498 ms
+--- gates.log closed count: 0
+--- sent.log:
+--- wd poll at 01:43:30:
+--- wd status at 01:40:58:
+memory gate: open - 40% of 10.0 GB RAM in use; 0 just-started worker(s) reserved, counted 40%
+processor gate: open - no processor reading on this platform
+connection gate: open - latency to 1.1.1.1 660 ms against a normal 50 ms while firstmate's workers carry only 0 of this machine's 66 KB/s, too little to be overloading it, so the connection itself or other programs are slow; upload 91 KB/s, download 21 KB/s
+room: yes - a new worker would be admitted now
+lines: closes at 85%, reopens below 70%, critical stop at 95%; each new worker reserves 1024 MB for 180s
+job ceilings: one headless browser tree 1536 MB, one test or terraform job 3072 MB
+processor lines: closes at pressure 25% or load 90% of cores, reopens below 10% and 70%, throttles after 30s at 50% or 115%
+connection lines: closes at 80 ms above normal latency while firstmate's workers carry at least 256 KB/s and most of this machine's traffic, reopens below 30 ms above or once they no longer do, after 300s pass without such an overload, throttles after 30s at 200 ms above
+throttled: nothing
+flagship: none (set with bin/fm-memory-watchdog.sh flagship <project>)
+deferred work: none
+watchdog loop: running (pid 501124, every 3s)
+history: 45 samples since 2026-10-06 01:03 (bin/fm-memory-watchdog.sh history --since HH:MM --until HH:MM explains a window)
+ok - the recorded hotspot latency of 300-2000 ms, with the traffic the worker and this machine recorded, neither closes the connection gate, alarms, nor throttles a worker
+# all fm-memory-watchdog tests passed

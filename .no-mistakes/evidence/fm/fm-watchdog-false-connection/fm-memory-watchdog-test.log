@@ -1,0 +1,41 @@
+ok - just-admitted workers count as reserved memory, so a burst is admitted only while it fits
+ok - a reservation stops counting after reserve_secs
+ok - the gate closes at 85% and reopens only below 70%
+ok - nearly exhausted swap closes the gate even with RAM to spare
+ok - --override admits a captain-directed worker and still counts it
+ok - without /proc/meminfo the gate admits with a warning instead of blocking
+ok - config/memory-gate is validated, tunable, and can switch the gate off
+ok - the critical line stops only the single largest heavy job in a task's tree and tells its worker
+ok - a heavy job whose subtree contains a worker agent is never stopped
+ok - a critical episode with nothing stoppable is reported once per episode
+ok - one browser tree over its ceiling is stopped early, alone, even while total memory is fine
+ok - a worktree a stale record and a live worker's record both name is charged to the worker running there, else to the newest record
+ok - one test run over the configured job ceiling is stopped and its worker told
+ok - freed memory announces deferred work once, and admission clears it
+ok - the dispatch queue puts the flagship project first, then keeps request order
+ok - the watchdog loop is a singleton that runs only while the home has work
+ok - fm-spawn defers a fresh spawn over the gate, admits it on --memory-override, and refuses the override for a secondmate
+ok - a deferred relaunch is announced as one when room frees and dropped when its task is torn down
+ok - a job is sized by summed PSS, falling back to RSS where PSS is unreadable
+ok - a held gate lock postpones only the gate update, never the job stops
+ok - trimming surfaced events keeps every later event for the next poll
+ok - processor pressure or load per core closes the processor gate, deferring new work until both fall under their reopen lines
+ok - latency well above its normal level closes the connection gate only while firstmate's workers carry the traffic, with hysteresis, and an unmaintained or unlearned reading never blocks work
+ok - the background latency probe is recorded by the next tick, and a lost probe counts as a timeout
+ok - a processor overload lowers the heaviest worker's priority, then pauses its commands in turns, never its agent, and releases on recovery
+ok - a connection overload pauses only the commands of the worker carrying the most traffic, loopback excluded, and releases on recovery
+ok - a processor overload no worker of this home causes is reported once per episode and throttles nothing
+ok - the recorded hotspot latency of 300-2000 ms, with the traffic the worker and this machine recorded, neither closes the connection gate, alarms, nor throttles a worker
+ok - the recorded hotspot latency while other programs move 800 KB/s more is not counted against the workers
+ok - the same recorded latency while a worker moves 800 KB/s still closes the gate and throttles that worker
+ok - a worker filling a slow uplink at 300 KB/s while latency rises 400 ms counts as overload: the gate closes and that worker is throttled
+ok - a worker filling the uplink at 300 KB/s over a VPN whose default route has no gateway still counts as overload
+ok - a worker moving 1 MB/s to a local container while another program streams 400 KB/s does not count as connection overload
+ok - an overload that dips for a minute at a time is one episode: one alarm, the gate closed, and one release only after net_calm_secs of calm
+ok - a poll continues commands whose pause a dead loop never ended
+ok - history explains a time window in plain words: ranges, peaks, held-back work, the busiest worker, throttles, gaps, actions, and a timeline
+ok - a history window that runs past now, such as during a slowdown, ends at now
+ok - a history window from before midnight to after it reads as one window
+ok - the history rotates to one previous file at history_kb, so it stays bounded
+ok - config/memory-gate validates and tunes the processor and connection lines and can switch each off
+# all fm-memory-watchdog tests passed
