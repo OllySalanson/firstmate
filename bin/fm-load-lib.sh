@@ -26,20 +26,22 @@
 # every FM_WATCHDOG_PROBE_EVERY seconds (default 6), one packet with a 2 s
 # timeout, through FM_WATCHDOG_PING_CMD (default ping; tests replace it); the
 # next tick harvests its result into the shared ring .net-latency
-# ("epoch<TAB>ms<TAB>bytes<TAB>interface", ms being "timeout" for a lost
-# probe and bytes the measured interface's received plus sent byte counter
-# at harvest, both omitted without readable counters), trimmed to its last
-# 600 lines. A reading covers the probes of the last FM_LOAD_NET_WINDOW
-# (60) seconds: its latency is their median, a timeout counting as 2000 ms,
-# and its traffic is this machine's KB/s between the first and last of them
-# carrying counters, which needs them to span at least half the window on
-# one interface. Normal latency is the 20th percentile of the successful
+# ("epoch<TAB>ms<TAB>rx<TAB>tx<TAB>interface", ms being "timeout" for a lost
+# probe and rx and tx the measured interface's received and sent byte
+# counters at harvest, all three omitted without readable counters), trimmed
+# to its last 600 lines. A reading covers the probes of the last
+# FM_LOAD_NET_WINDOW (60) seconds: its latency is their median, a timeout
+# counting as 2000 ms, and its traffic is this machine's upload and download
+# KB/s between the first and last of them carrying counters, which needs
+# them to span at least half the window on one interface. Normal latency is the 20th percentile of the successful
 # probes in the last hour, and needs at least five of them. Without a normal
 # figure the connection is "unknown", which never closes the gate.
 # The connection lines compare current latency minus normal latency, because
 # a saturated link shows first as queueing delay, but that delay counts
-# only while this machine moves at least net_busy_kbs: below it, raised
-# latency is the connection itself (a phone hotspot or busy mobile cell,
+# only while this machine sends at least net_busy_up_kbs or receives at least
+# net_busy_down_kbs, each direction judged alone because a link's uplink is
+# often a fraction of its downlink: below both, raised latency is the
+# connection itself (a phone hotspot or busy mobile cell,
 # Wi-Fi, other devices), not an overload this machine causes, so the level
 # reads low. Once a busy reading reaches the close line, the level reads at
 # least high until no busy reading has reached it for net_calm_secs,
@@ -224,7 +226,7 @@ fm_load_latency_harvest() {
 $(fm_load_net_bytes)
 EOF_BYTES
   then
-    [ -z "$iface" ] || counters=$(printf '\t%s\t%s' "$((rx + tx))" "$iface")
+    [ -z "$iface" ] || counters=$(printf '\t%s\t%s\t%s' "$rx" "$tx" "$iface")
   fi
   printf '%s\t%s%s\n' "$now" "$ms" "$counters" >>"$ring"
   if [ "$(wc -l <"$ring" | tr -d '[:space:]')" -gt 700 ]; then
@@ -251,52 +253,56 @@ fm_load_latency_probe() {
 }
 
 # fm_load_latency_read <shared-state> <now>: set FM_NET_RTT and FM_NET_BASE
-# (whole ms, or empty), FM_NET_OVER (rtt - base, or empty), FM_NET_KBS (this
-# machine's traffic over the reading, or empty), FM_NET_QUIET (1 when the
-# latency alone would reach the close line but the traffic is under
-# net_busy_kbs), FM_NET_SETTLING (1 when only the calm hold keeps the level
+# (whole ms, or empty), FM_NET_OVER (rtt - base, or empty), FM_NET_SEND_KBS
+# and FM_NET_RECV_KBS (this machine's upload and download over the reading,
+# both or neither empty), FM_NET_QUIET (1 when the latency alone would reach
+# the close line but the traffic is under net_busy_up_kbs and
+# net_busy_down_kbs), FM_NET_SETTLING (1 when only the calm hold keeps the level
 # high), and FM_NET_LEVEL (header), from the latency ring.
 fm_load_latency_read() {
   local shared=$1 now=$2 result sticky
   FM_NET_RTT=
   FM_NET_BASE=
   FM_NET_OVER=
-  FM_NET_KBS=
+  FM_NET_SEND_KBS=
+  FM_NET_RECV_KBS=
   FM_NET_QUIET=0
   FM_NET_SETTLING=0
   result=$(awk -F '\t' -v now="$now" -v win="$FM_LOAD_NET_WINDOW" -v calm="$FM_NET_CALM_SECS" \
-    -v closems="$FM_LATENCY_CLOSE_MS" -v busy="$FM_NET_BUSY_KBS" '
+    -v closems="$FM_LATENCY_CLOSE_MS" -v busyup="$FM_NET_BUSY_UP_KBS" -v busydown="$FM_NET_BUSY_DOWN_KBS" '
     $1 !~ /^[0-9]+$/ || $1 > now { next }
     now - $1 <= 3600 && $2 ~ /^[0-9]+$/ { ok[++n] = $2 + 0 }
     now - $1 < calm + win {
       m++; t[m] = $1 + 0; ms[m] = ($2 ~ /^[0-9]+$/ ? $2 + 0 : 2000)
-      by[m] = ($3 ~ /^[0-9]+$/ && $4 != "" ? $3 + 0 : -1); ifc[m] = $4
+      rx[m] = ($3 ~ /^[0-9]+$/ && $4 ~ /^[0-9]+$/ && $5 != "" ? $3 + 0 : -1); tx[m] = $4 + 0; ifc[m] = $5
     }
     function sortn(a, c,   i, j, x) { for (i = 2; i <= c; i++) { x = a[i]; for (j = i - 1; j >= 1 && a[j] > x; j--) a[j + 1] = a[j]; a[j + 1] = x } }
-    # reading <end>: W_RTT (median ms) and W_KBS (KB/s) of the probes in
-    # (end - win, end], each empty when unmeasured.
+    # reading <end>: W_RTT (median ms), W_UP and W_DOWN (KB/s) of the probes
+    # in (end - win, end], each empty when unmeasured.
     function reading(end,   i, c, v, f, l) {
-      W_RTT = ""; W_KBS = ""; c = 0; f = 0; l = 0
+      W_RTT = ""; W_UP = ""; W_DOWN = ""; c = 0; f = 0; l = 0
       for (i = 1; i <= m; i++) {
         if (t[i] <= end - win || t[i] > end) continue
         v[++c] = ms[i]
-        if (by[i] < 0) continue
+        if (rx[i] < 0) continue
         if (!f) f = i
         else if (ifc[i] == ifc[f]) l = i
       }
       if (c > 0) { sortn(v, c); W_RTT = v[int((c + 1) / 2)] }
-      if (f && l && t[l] - t[f] >= win / 2 && by[l] >= by[f]) W_KBS = int((by[l] - by[f]) / 1024 / (t[l] - t[f]))
+      if (f && l && t[l] - t[f] >= win / 2 && rx[l] >= rx[f] && tx[l] >= tx[f]) {
+        W_UP = int((tx[l] - tx[f]) / 1024 / (t[l] - t[f])); W_DOWN = int((rx[l] - rx[f]) / 1024 / (t[l] - t[f]))
+      }
     }
-    function overloaded() { return W_RTT != "" && W_KBS != "" && W_RTT - base >= closems && W_KBS >= busy }
+    function overloaded() { return W_RTT != "" && W_UP != "" && W_RTT - base >= closems && (W_UP >= busyup || W_DOWN >= busydown) }
     END {
       base = ""; sticky = 0
       if (n >= 5) { sortn(ok, n); base = ok[int((n - 1) * 0.2) + 1] }
       if (base != "") for (i = 1; i <= m; i++) if (now - t[i] < calm) { reading(t[i]); if (overloaded()) sticky = 1 }
       reading(now)
-      print base "|" W_RTT "|" W_KBS "|" sticky
+      print base "|" W_RTT "|" W_UP "|" W_DOWN "|" sticky
     }
   ' "$shared/.net-latency" 2>/dev/null)
-  IFS='|' read -r FM_NET_BASE FM_NET_RTT FM_NET_KBS sticky <<EOF_READING
+  IFS='|' read -r FM_NET_BASE FM_NET_RTT FM_NET_SEND_KBS FM_NET_RECV_KBS sticky <<EOF_READING
 $result
 EOF_READING
   if [ -n "$FM_NET_BASE" ] && [ -n "$FM_NET_RTT" ]; then
@@ -305,7 +311,8 @@ EOF_READING
   fi
   FM_NET_LEVEL=$(fm_load_level "$FM_NET_OVER" "$FM_LATENCY_REOPEN_MS" "$FM_LATENCY_CLOSE_MS" "$FM_LATENCY_CRITICAL_MS")
   [ "$FM_NET_LEVEL" != unknown ] || return 0
-  if [ -z "$FM_NET_KBS" ] || [ "$FM_NET_KBS" -lt "$FM_NET_BUSY_KBS" ]; then
+  if [ -z "$FM_NET_SEND_KBS" ] ||
+    { [ "$FM_NET_SEND_KBS" -lt "$FM_NET_BUSY_UP_KBS" ] && [ "$FM_NET_RECV_KBS" -lt "$FM_NET_BUSY_DOWN_KBS" ]; }; then
     case "$FM_NET_LEVEL" in high | critical) FM_NET_QUIET=1 ;; esac
     FM_NET_LEVEL=low
   fi

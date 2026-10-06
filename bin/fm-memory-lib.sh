@@ -75,8 +75,8 @@ FM_MEMORY_DEFERRED_EXIT=75
 # percent), FM_LOAD_CLOSE, FM_LOAD_REOPEN, FM_LOAD_CRITICAL (load as percent
 # of cores), FM_NET_ENABLED, FM_LATENCY_CLOSE_MS, FM_LATENCY_REOPEN_MS,
 # FM_LATENCY_CRITICAL_MS (milliseconds above normal), FM_LATENCY_HOST,
-# FM_NET_INTERFACE (empty = the default route's), FM_NET_BUSY_KBS,
-# FM_NET_CALM_SECS, FM_CRITICAL_SECS, and FM_HISTORY_KB.
+# FM_NET_INTERFACE (empty = the default route's), FM_NET_BUSY_UP_KBS,
+# FM_NET_BUSY_DOWN_KBS, FM_NET_CALM_SECS, FM_CRITICAL_SECS, and FM_HISTORY_KB.
 # Returns 1 with FM_MEMORY_CONFIG_ERROR set for a malformed config/memory-gate;
 # the defaults stay loaded so a caller that must keep protecting can use them.
 fm_memory_load_config() {
@@ -102,7 +102,8 @@ fm_memory_load_config() {
   FM_LATENCY_CRITICAL_MS=200
   FM_LATENCY_HOST=1.1.1.1
   FM_NET_INTERFACE=
-  FM_NET_BUSY_KBS=512
+  FM_NET_BUSY_UP_KBS=256
+  FM_NET_BUSY_DOWN_KBS=512
   FM_NET_CALM_SECS=300
   FM_CRITICAL_SECS=30
   FM_HISTORY_KB=1024
@@ -120,7 +121,7 @@ fm_memory_load_config() {
   local load_close=$FM_LOAD_CLOSE load_reopen=$FM_LOAD_REOPEN load_critical=$FM_LOAD_CRITICAL
   local connection=1 latency_close_ms=$FM_LATENCY_CLOSE_MS latency_reopen_ms=$FM_LATENCY_REOPEN_MS
   local latency_critical_ms=$FM_LATENCY_CRITICAL_MS latency_host=$FM_LATENCY_HOST net_interface=
-  local net_busy_kbs=$FM_NET_BUSY_KBS net_calm_secs=$FM_NET_CALM_SECS
+  local net_busy_up_kbs=$FM_NET_BUSY_UP_KBS net_busy_down_kbs=$FM_NET_BUSY_DOWN_KBS net_calm_secs=$FM_NET_CALM_SECS
   local critical_secs=$FM_CRITICAL_SECS history_kb=$FM_HISTORY_KB switch
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line%%#*}
@@ -162,10 +163,11 @@ fm_memory_load_config() {
         ;;
       close | reopen | critical | reserve_mb | reserve_secs | browser_ceiling_mb | job_ceiling_mb) ;;
       cpu_close | cpu_reopen | cpu_critical | load_close | load_reopen | load_critical) ;;
-      latency_close_ms | latency_reopen_ms | latency_critical_ms | net_busy_kbs | net_calm_secs) ;;
+      latency_close_ms | latency_reopen_ms | latency_critical_ms) ;;
+      net_busy_up_kbs | net_busy_down_kbs | net_calm_secs) ;;
       critical_secs | history_kb) ;;
       *)
-        FM_MEMORY_CONFIG_ERROR="config/memory-gate has unknown key '$key' (known: enabled, close, reopen, critical, reserve_mb, reserve_secs, browser_ceiling_mb, job_ceiling_mb, processor, cpu_close, cpu_reopen, cpu_critical, load_close, load_reopen, load_critical, connection, latency_close_ms, latency_reopen_ms, latency_critical_ms, latency_host, net_interface, net_busy_kbs, net_calm_secs, critical_secs, history_kb)"
+        FM_MEMORY_CONFIG_ERROR="config/memory-gate has unknown key '$key' (known: enabled, close, reopen, critical, reserve_mb, reserve_secs, browser_ceiling_mb, job_ceiling_mb, processor, cpu_close, cpu_reopen, cpu_critical, load_close, load_reopen, load_critical, connection, latency_close_ms, latency_reopen_ms, latency_critical_ms, latency_host, net_interface, net_busy_up_kbs, net_busy_down_kbs, net_calm_secs, critical_secs, history_kb)"
         return 1
         ;;
     esac
@@ -192,7 +194,8 @@ fm_memory_load_config() {
       latency_close_ms) latency_close_ms=$value ;;
       latency_reopen_ms) latency_reopen_ms=$value ;;
       latency_critical_ms) latency_critical_ms=$value ;;
-      net_busy_kbs) net_busy_kbs=$value ;;
+      net_busy_up_kbs) net_busy_up_kbs=$value ;;
+      net_busy_down_kbs) net_busy_down_kbs=$value ;;
       net_calm_secs) net_calm_secs=$value ;;
       critical_secs) critical_secs=$value ;;
       history_kb) history_kb=$value ;;
@@ -235,7 +238,8 @@ fm_memory_load_config() {
   FM_LATENCY_CRITICAL_MS=$latency_critical_ms
   FM_LATENCY_HOST=$latency_host
   FM_NET_INTERFACE=$net_interface
-  FM_NET_BUSY_KBS=$net_busy_kbs
+  FM_NET_BUSY_UP_KBS=$net_busy_up_kbs
+  FM_NET_BUSY_DOWN_KBS=$net_busy_down_kbs
   FM_NET_CALM_SECS=$net_calm_secs
   FM_CRITICAL_SECS=$critical_secs
   FM_HISTORY_KB=$history_kb
