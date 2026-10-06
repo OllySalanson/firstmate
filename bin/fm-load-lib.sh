@@ -26,13 +26,31 @@
 # every FM_WATCHDOG_PROBE_EVERY seconds (default 6), one packet with a 2 s
 # timeout, through FM_WATCHDOG_PING_CMD (default ping; tests replace it); the
 # next tick harvests its result into the shared ring .net-latency
-# ("epoch<TAB>ms", or "epoch<TAB>timeout"), trimmed to its last 600 lines. The
-# current latency is the median of the last three probes from the last 60 s,
-# with a timeout counted as 2000 ms. Normal latency is the 20th percentile of
-# the successful probes in the last hour, and needs at least five of them.
-# Without a normal figure the connection is "unknown", which never closes
-# the gate. The connection lines compare current latency minus normal
-# latency, because a saturated upload shows first as queueing delay.
+# ("epoch<TAB>ms", or "epoch<TAB>timeout"), trimmed to its last 600 lines.
+# Each analysis sample of every home (bin/fm-memory-watchdog.sh) appends to
+# the shared ring .net-traffic ("epoch<TAB>home state<TAB>secs<TAB>worker
+# KB/s<TAB>up KB/s<TAB>down KB/s": the traffic this home's workers carried,
+# by the attribution below, and this machine's interface rates, over the
+# secs before epoch), trimmed the same way. A reading covers the last
+# FM_LOAD_NET_WINDOW (60) seconds: its latency is the median of their
+# probes, a timeout counting as 2000 ms, and its traffic is the samples
+# ending in them, weighted by the seconds each covers, which need to cover
+# at least half the window: this machine's rate, and the workers' rate,
+# each home's averaged on its own and then summed. Every home records under
+# the gate lock, so a trim never drops another home's sample. Normal latency is the
+# 20th percentile of the successful probes in the last hour, and needs at
+# least five of them. Without a normal figure the connection is "unknown",
+# which never closes the gate.
+# The connection lines compare current latency minus normal latency, because
+# a saturated link shows first as queueing delay, but that delay counts only
+# while firstmate's workers carry at least net_worker_kbs and most of this
+# machine's traffic: otherwise raised latency is the connection itself (a
+# phone hotspot or busy mobile cell, Wi-Fi, other devices) or other programs
+# on this machine, neither an overload holding back work can ease, so the
+# level reads low. Once a counted reading reaches the close line, the level
+# reads at least high until no counted reading has reached it for
+# net_calm_secs, recomputed from the rings at every read, so one overload is
+# one episode.
 #
 # Gates. .cpu-gate and .net-gate in the shared state directory hold
 # "open|closed epoch" with the memory gate's hysteresis: closed when a close
@@ -44,16 +62,23 @@
 # Attribution (fm_load_task_trees). A task's tree is each worker agent
 # process (bin/fm-memory-lib.sh fm_memory_argv_is_agent) whose working
 # directory is inside a recorded ship or scout worktree and whose parent is
-# not such an agent, plus every descendant of it. Nothing outside those trees
-# - firstmate, a secondmate, the terminal multiplexer, the no-mistakes daemon,
-# or the owner's own programs - is ever attributed, throttled, or signaled.
+# not such an agent, plus every descendant of it; a worktree two records name
+# belongs to one of them (bin/fm-memory-lib.sh fm_memory_task_worktrees).
+# Nothing outside those trees - firstmate, a secondmate, the terminal
+# multiplexer, the no-mistakes daemon, or the owner's own programs - is ever
+# attributed, throttled, or signaled.
 # Processor use is the summed utime+stime+cutime+cstime of a tree between two
 # samples, so commands that already exited still count through the parent
 # that reaped them. Connection use is the TCP bytes acknowledged plus received
 # per socket from `ss -tinpH state established` (FM_WATCHDOG_SS_CMD replaces
-# it in tests), loopback peers excluded, between two samples, credited to the
-# tree owning the socket's first listed process; UDP traffic (QUIC) is not
-# attributed. Interface rates come from <proc>/net/dev for net_interface, else
+# it in tests), between two samples, credited to the tree owning the socket's
+# first listed process. Only internet traffic counts: an IPv4 peer whose most
+# specific route in <proc>/net/route is on the measured interface and either
+# leaves through a gateway or is the default route (a VPN or point-to-point
+# link has none), or a global unicast IPv6 peer (2000::/3), so traffic to
+# loopback, a container on a bridge network, or any other directly connected
+# subnet is never attributed. UDP traffic (QUIC) is not attributed.
+# Interface rates come from <proc>/net/dev for net_interface, else
 # the default route's interface in <proc>/net/route, else every non-loopback
 # interface summed.
 #
@@ -82,6 +107,7 @@ FM_LOAD_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$FM_LOAD_LIB_DIR/fm-memory-lib.sh"
 
 FM_LOAD_NICE=10
+FM_LOAD_NET_WINDOW=60
 
 # --- processor ---------------------------------------------------------------
 
@@ -207,10 +233,23 @@ fm_load_latency_harvest() {
   rm -f "$out"
   case "$ms" in '' | *[!0-9]*) ms=timeout ;; esac
   printf '%s\t%s\n' "$now" "$ms" >>"$ring"
+  fm_load_ring_trim "$ring"
+}
+
+# fm_load_ring_trim <ring>: keep a shared ring to its last 600 lines.
+fm_load_ring_trim() {
+  local ring=$1
   if [ "$(wc -l <"$ring" | tr -d '[:space:]')" -gt 700 ]; then
     tail -n 600 "$ring" >"$ring.tmp.$$" && mv -f "$ring.tmp.$$" "$ring"
     rm -f "$ring.tmp.$$" 2>/dev/null || true
   fi
+}
+
+# fm_load_traffic_record <shared-state> <now> <home-state> <secs>
+# <worker-kbs> <up-kbs> <down-kbs>: append one sample to the traffic ring.
+fm_load_traffic_record() {
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$2" "$3" "$4" "$5" "$6" "$7" >>"$1/.net-traffic"
+  fm_load_ring_trim "$1/.net-traffic"
 }
 
 # fm_load_latency_probe <shared-state> <now> <host>: start one background
@@ -231,36 +270,80 @@ fm_load_latency_probe() {
 }
 
 # fm_load_latency_read <shared-state> <now>: set FM_NET_RTT and FM_NET_BASE
-# (whole ms, or empty), FM_NET_OVER (rtt - base, or empty), and FM_NET_LEVEL
-# (header), from the latency ring.
+# (whole ms, or empty), FM_NET_OVER (rtt - base, or empty), FM_NET_WORK_KBS
+# and FM_NET_ALL_KBS (the workers' and this machine's traffic over the
+# reading, both or neither empty), FM_NET_QUIET (1 when the latency alone
+# would reach the close line but the workers do not carry enough of the
+# traffic for it to count), FM_NET_SETTLING (1 when only the calm hold keeps
+# the level high), and FM_NET_LEVEL (header), from the two rings.
 fm_load_latency_read() {
-  local shared=$1 now=$2 result
+  local shared=$1 now=$2 result sticky counted
   FM_NET_RTT=
   FM_NET_BASE=
   FM_NET_OVER=
-  result=$(awk -F '\t' -v now="$now" '
-    $1 !~ /^[0-9]+$/ { next }
-    now - $1 <= 3600 && $2 ~ /^[0-9]+$/ { ok[++n] = $2 + 0 }
-    now - $1 <= 60 { recent[++r] = ($2 ~ /^[0-9]+$/ ? $2 + 0 : 2000) }
-    function sortn(a, c,   i, j, t) { for (i = 2; i <= c; i++) { t = a[i]; for (j = i - 1; j >= 1 && a[j] > t; j--) a[j + 1] = a[j]; a[j + 1] = t } }
-    END {
-      base = ""; rtt = ""
-      if (n >= 5) { sortn(ok, n); idx = int((n - 1) * 0.2) + 1; base = ok[idx] }
-      if (r > 0) {
-        s = (r > 3 ? r - 2 : 1); c = 0
-        for (i = s; i <= r; i++) last[++c] = recent[i]
-        sortn(last, c); rtt = last[int((c + 1) / 2)]
+  FM_NET_WORK_KBS=
+  FM_NET_ALL_KBS=
+  FM_NET_QUIET=0
+  FM_NET_SETTLING=0
+  result=$(awk -F '\t' -v now="$now" -v win="$FM_LOAD_NET_WINDOW" -v calm="$FM_NET_CALM_SECS" \
+    -v closems="$FM_LATENCY_CLOSE_MS" -v floor="$FM_NET_WORKER_KBS" -v traffic="$shared/.net-traffic" '
+    BEGIN {
+      while ((getline l < traffic) > 0) {
+        if (split(l, f, "\t") < 6 || f[1] !~ /^[0-9]+$/ || f[3] !~ /^[1-9][0-9]*$/) continue
+        if (f[1] > now || now - f[1] >= calm + win) continue
+        s++; st[s] = f[1] + 0; sh[s] = f[2]; sd[s] = f[3] + 0; sw[s] = f[4] + 0; sa[s] = f[5] + f[6]
       }
-      print base "\t" rtt
+    }
+    $1 !~ /^[0-9]+$/ || $1 > now { next }
+    now - $1 <= 3600 && $2 ~ /^[0-9]+$/ { ok[++n] = $2 + 0 }
+    now - $1 < calm + win { m++; t[m] = $1 + 0; ms[m] = ($2 ~ /^[0-9]+$/ ? $2 + 0 : 2000) }
+    function sortn(a, c,   i, j, x) { for (i = 2; i <= c; i++) { x = a[i]; for (j = i - 1; j >= 1 && a[j] > x; j--) a[j + 1] = a[j]; a[j + 1] = x } }
+    # reading <end>: W_RTT (median ms), W_WORK and W_ALL (KB/s) of the
+    # reading ending at <end>, each empty when unmeasured.
+    function reading(end,   i, c, v, h, all, cover, wsum, wcover, w) {
+      W_RTT = ""; W_WORK = ""; W_ALL = ""; c = 0; all = 0; cover = 0; w = 0
+      for (i = 1; i <= m; i++) if (t[i] > end - win && t[i] <= end) v[++c] = ms[i]
+      if (c > 0) { sortn(v, c); W_RTT = v[int((c + 1) / 2)] }
+      for (i = 1; i <= s; i++) {
+        if (st[i] <= end - win || st[i] > end) continue
+        all += sa[i] * sd[i]; cover += sd[i]
+        wsum[sh[i]] += sw[i] * sd[i]; wcover[sh[i]] += sd[i]
+      }
+      if (cover < win / 2) return
+      for (h in wsum) w += wsum[h] / wcover[h]
+      W_WORK = int(w); W_ALL = int(all / cover)
+    }
+    function counted() { return W_WORK != "" && W_WORK >= floor && W_WORK * 2 > W_ALL }
+    function overloaded() { return W_RTT != "" && W_RTT - base >= closems && counted() }
+    END {
+      base = ""; sticky = 0
+      if (n >= 5) { sortn(ok, n); base = ok[int((n - 1) * 0.2) + 1] }
+      if (base != "") for (i = 1; i <= m; i++) if (now - t[i] < calm) { reading(t[i]); if (overloaded()) sticky = 1 }
+      reading(now)
+      print base "|" W_RTT "|" W_WORK "|" W_ALL "|" sticky "|" counted()
     }
   ' "$shared/.net-latency" 2>/dev/null)
-  FM_NET_BASE=${result%%$'\t'*}
-  FM_NET_RTT=${result#*$'\t'}
+  IFS='|' read -r FM_NET_BASE FM_NET_RTT FM_NET_WORK_KBS FM_NET_ALL_KBS sticky counted <<EOF_READING
+$result
+EOF_READING
   if [ -n "$FM_NET_BASE" ] && [ -n "$FM_NET_RTT" ]; then
     FM_NET_OVER=$((FM_NET_RTT - FM_NET_BASE))
     [ "$FM_NET_OVER" -ge 0 ] || FM_NET_OVER=0
   fi
   FM_NET_LEVEL=$(fm_load_level "$FM_NET_OVER" "$FM_LATENCY_REOPEN_MS" "$FM_LATENCY_CLOSE_MS" "$FM_LATENCY_CRITICAL_MS")
+  [ "$FM_NET_LEVEL" != unknown ] || return 0
+  if [ "${counted:-0}" != 1 ]; then
+    case "$FM_NET_LEVEL" in high | critical) FM_NET_QUIET=1 ;; esac
+    FM_NET_LEVEL=low
+  fi
+  case "$FM_NET_LEVEL" in
+    low | mid)
+      if [ "${sticky:-0}" = 1 ]; then
+        FM_NET_LEVEL=high
+        FM_NET_SETTLING=1
+      fi
+      ;;
+  esac
 }
 
 # fm_load_net_interface: print the measured interface (header).
@@ -276,12 +359,14 @@ fm_load_net_interface() {
 
 # fm_load_net_rates <state-dir> <now>: set FM_NET_IFACE, FM_NET_UP_KBS, and
 # FM_NET_DOWN_KBS (whole KB/s since the previous call, or empty on the
-# first), remembering the counters in .watchdog-netdev.
+# first), and FM_NET_RATE_SECS (the seconds they cover), remembering the
+# counters in .watchdog-netdev.
 fm_load_net_rates() {
   local state=$1 now=$2 proc counters rx tx pepoch prx ptx piface elapsed
   proc=$(fm_memory_proc_root)
   FM_NET_UP_KBS=
   FM_NET_DOWN_KBS=
+  FM_NET_RATE_SECS=
   FM_NET_IFACE=$(fm_load_net_interface)
   counters=$(awk -v want="$FM_NET_IFACE" '
     NR > 2 {
@@ -302,6 +387,7 @@ fm_load_net_rates() {
     if [ "$elapsed" -gt 0 ] && [ "$rx" -ge "$prx" ] && [ "$tx" -ge "$ptx" ]; then
       FM_NET_DOWN_KBS=$(((rx - prx) / 1024 / elapsed))
       FM_NET_UP_KBS=$(((tx - ptx) / 1024 / elapsed))
+      FM_NET_RATE_SECS=$elapsed
     fi
   fi
   printf '%s %s %s %s\n' "$now" "$rx" "$tx" "$FM_NET_IFACE" >"$state/.watchdog-netdev"
@@ -421,15 +507,40 @@ fm_load_task_cpu() {
 }
 
 # fm_load_task_net <state-dir> <trees> <now>: print "task<TAB>KB/s" per task
-# (connection use since the previous call), remembering per-socket byte
-# counts in .watchdog-sockets.
+# (internet use since the previous call, header), remembering per-socket
+# byte counts in .watchdog-sockets.
 fm_load_task_net() {
-  local state=$1 trees=$2 now=$3 prev="$1/.watchdog-sockets" ss_out
+  local state=$1 trees=$2 now=$3 prev="$1/.watchdog-sockets" ss_out want
   # shellcheck disable=SC2086 # FM_WATCHDOG_SS_CMD is a command line.
   ss_out=$(${FM_WATCHDOG_SS_CMD:-ss -tinpH state established} 2>/dev/null) || ss_out=
   [ -n "$ss_out" ] || return 0
-  printf '%s\n' "$ss_out" | awk -v trees="$trees" -v prev="$prev" -v now="$now" -v out="$prev.tmp.$$" '
+  want=$(fm_load_net_interface)
+  printf '%s\n' "$ss_out" | awk -v trees="$trees" -v prev="$prev" -v now="$now" -v out="$prev.tmp.$$" \
+    -v routes="$(fm_memory_proc_root)/net/route" -v want="$want" '
+    function hex(s,   i, v) { v = 0; for (i = 1; i <= length(s); i++) v = v * 16 + index("0123456789abcdef", tolower(substr(s, i, 1))) - 1; return v }
+    # internet <peer>: 1 when traffic to the ss peer address:port leaves
+    # through the measured interface toward the internet (header).
+    function internet(peer,   a, o, r, i, ok, best) {
+      a = peer; sub(/:[^:]*$/, "", a); gsub(/[][]/, "", a); sub(/^::ffff:/, "", a)
+      if (a ~ /:/) return a ~ /^[23]/
+      if (a ~ /^127\./ || split(a, o, ".") != 4) return 0
+      best = 0
+      for (r = 1; r <= nr; r++) {
+        ok = 1
+        for (i = 1; i <= 4; i++) if (o[i] - o[i] % (256 - rm[r, i]) != rd[r, i]) ok = 0
+        if (ok && (!best || rmask[r] > rmask[best])) best = r
+      }
+      return best && routed[best] && (want != "" ? rif[best] == want : rif[best] != "lo")
+    }
     BEGIN {
+      while ((getline l < routes) > 0) {
+        if (split(l, f, " ") < 8 || f[2] !~ /^[0-9A-Fa-f]+$/ || length(f[2]) != 8 || f[8] !~ /^[0-9A-Fa-f]+$/ || length(f[8]) != 8) continue
+        nr++; rif[nr] = f[1]; routed[nr] = (hex(f[3]) != 0 || hex(f[8]) == 0); rmask[nr] = 0
+        for (i = 1; i <= 4; i++) {
+          rd[nr, i] = hex(substr(f[2], 9 - 2 * i, 2)); rm[nr, i] = hex(substr(f[8], 9 - 2 * i, 2))
+          rmask[nr] = rmask[nr] * 256 + rm[nr, i]
+        }
+      }
       while ((getline l < trees) > 0) { split(l, f, "\t"); owner[f[2]] = f[1] }
       if ((getline l < prev) > 0) { pepoch = l + 0; have = 1 }
       while ((getline l < prev) > 0) { n = split(l, f, "\t"); pb[f[1]] = f[2] }
@@ -437,7 +548,7 @@ fm_load_task_net() {
     }
     /^[^[:space:]]/ {
       key = ""; pid = ""
-      if ($4 ~ /^(127\.|\[::1\]|\[::ffff:127\.)/) next
+      if (!internet($4)) next
       key = $3 " " $4
       if (match($0, /pid=[0-9]+/)) pid = substr($0, RSTART + 4, RLENGTH - 4)
       next

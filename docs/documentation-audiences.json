@@ -535,6 +535,10 @@
     {
       "path": "tests/captures/no-mistakes-v1.70.1/README.md",
       "audience": "maintainer-verification"
+    },
+    {
+      "path": "tests/captures/watchdog-hotspot-2026-10-06/README.md",
+      "audience": "maintainer-verification"
     }
   ]
 }

@@ -483,6 +483,7 @@ One headless browser tree above its ceiling (default 1.5 GB), or one test-run or
 A job's size is the proportional set size (PSS) of its process tree, so pages a multi-process browser or test pool shares are split between its processes rather than counted once per process; a process whose PSS cannot be read counts its resident size instead.
 A browser inside a test run is measured by itself, so only the browser is stopped.
 Every ship and scout worker is launched with `CHROME_DEVTOOLS_AXI_SESSION=fm-<task-id>`, so each drives its own chrome-devtools-axi browser, started from its own local copy, and a ballooning browser is attributed to and stopped for the worker that owns it.
+When a finished or dead task's record still names a local copy that a newer task now runs in, the watchdog charges, stops, throttles, and tells only the worker running there, named by the `FM_TASK_ID` in its own environment, or else the most recently spawned record.
 Ship and scout briefs (`bin/fm-brief.sh`) tell workers to keep one headless browser at a time, close it between screenshots, use a small viewport, and cap test-runner workers.
 
 ### Processor and connection
@@ -492,19 +493,25 @@ It reopens only once both are under their reopen lines (defaults 10% and 70%).
 Load per core counts as well as pressure because WSL shares the machine's cores with Windows: a game or browser starts lagging once WSL asks for most of the cores, before WSL itself is oversubscribed and pressure rises.
 Without a pressure reading, load alone decides.
 
-The connection gate watches round-trip latency to a stable host (default `1.1.1.1`), probed in the background once every few seconds, because a saturated upload shows first as queueing delay on every connection in the house.
-It closes when current latency (the median of the last three probes) reaches its close line above the connection's normal latency (default 80 ms above), and reopens below its reopen line (default 30 ms above).
+The connection gate watches round-trip latency to a stable host (default `1.1.1.1`), probed in the background once every few seconds, because a saturated link shows first as queueing delay on every connection in the house.
+Latency alone is not proof of an overload this machine causes: on a phone hotspot or a busy mobile cell, over weak Wi-Fi, or while another device or a Windows-side program downloads, latency rises and falls whatever WSL does, and holding back work cannot help.
+Nor is this machine's traffic alone: a streaming app or a Windows-side download moves as many bytes as a worker, and holding back workers cannot slow it.
+So a reading counts only while firstmate's ship and scout workers themselves carry at least `net_worker_kbs` (default 256 KB/s, about 2 megabits per second, enough to fill a hotspot's upload) and most of the traffic through this machine's network interface, over the same minute the reading covers, measured from the workers' own connections to the internet.
+A worker's connection counts only when it leaves through that interface toward the internet, so a test suite talking to a local container or another program on this machine never counts.
+Otherwise raised latency is the connection itself or other programs, and status says so.
+It closes when current latency (the median of the probes from the last minute) reaches its close line above the connection's normal latency (default 80 ms above) while the workers carry that traffic.
+It reopens once latency falls below its reopen line (default 30 ms above) or the workers no longer carry that traffic, but only after `net_calm_secs` (default 300) have passed without such an overload reading, so one overload with short dips stays one episode instead of flapping.
 Normal latency is learned from the last hour of probes, so until a few probes have succeeded, or when the host never answers, the connection never holds work back.
-Upload and download rates of the WSL network interface are measured and shown, but latency is what decides.
+Upload and download rates of the WSL network interface are also shown in status and recorded in the history.
 
 New spawns and relaunches are deferred while either gate is closed, exactly like a full memory gate, with a `deferred:` line naming the reading; the room notice waits for all three gates, and `--memory-override` admits past any of them.
 
-When the processor or the connection stays past its critical line (defaults: pressure 50% or load 115% of the cores; latency 200 ms above normal) for `critical_secs` (default 30 seconds), the watchdog throttles the worker of this home using the most of it, measured over its whole process tree, and tells that worker why through `bin/fm-send.sh`.
+When the processor or the connection stays past its critical line (defaults: pressure 50% or load 115% of the cores; latency 200 ms above normal while the workers carry that traffic) for `critical_secs` (default 30 seconds), the watchdog throttles the worker of this home using the most of it, measured over its whole process tree, and tells that worker why through `bin/fm-send.sh`.
 For the processor it first lowers the priority of the worker's agent and commands; if the processor is still critical after another `critical_secs`, it pauses the worker's commands (SIGSTOP) for ten seconds at a time with ten seconds of running in between (SIGCONT).
 For the connection it goes straight to pausing, since priority does not slow traffic.
-It releases once the reading falls back under its close line, and tells the worker and firstmate at every step; lowered priority stays, because an unprivileged process cannot raise it again, and only matters while the machine is busy.
+It releases once the reading falls back under its close line, which for the connection means once `net_calm_secs` pass without an overload reading, and tells the worker and firstmate at every step; lowered priority stays, because an unprivileged process cannot raise it again, and only matters while the machine is busy.
 Nothing is ever killed, the worker agent process itself is never paused (so it keeps reading its inbox), and nothing outside a recorded ship or scout worker's own process tree - firstmate, a secondmate, the terminal, the no-mistakes daemon, or the owner's own programs - is ever throttled.
-When the overload comes from somewhere else, the watchdog reports that once per episode and throttles nothing.
+When the overload comes from somewhere else, the watchdog reports that once per episode, which lasts until the reading is back under its close line, and throttles nothing.
 Processor use counts commands that already finished, while traffic covers TCP connections only, so a worker's UDP (QUIC) traffic is not attributed.
 Windows-side programs are out of reach: the watchdog sees and controls only WSL.
 
@@ -544,17 +551,19 @@ latency_close_ms=80     # latency above normal that closes the connection gate
 latency_reopen_ms=30    # latency above normal below which it can reopen
 latency_critical_ms=200 # latency above normal that starts the throttle clock
 latency_host=1.1.1.1    # the stable host the latency probe pings
-net_interface=eth0      # the interface whose rates are shown; absent = the default route's
+net_interface=eth0      # the interface whose traffic is measured; absent = the default route's
+net_worker_kbs=256      # KB/s the workers must carry, and most of this machine's traffic, before raised latency counts as their overload
+net_calm_secs=300       # seconds without an overload reading before a connection overload ends
 critical_secs=30  # how long the processor or connection stays critical before a throttle step
 history_kb=1024   # size at which the sample history rotates
 ```
 
-The defaults suit an 8-core, roughly 11 GB WSL machine on home Wi-Fi.
+The defaults suit an 8-core, roughly 11 GB WSL machine on home Wi-Fi or a phone hotspot.
 Values must satisfy `reopen < close < critical <= 100` for memory and for `cpu_*`, `load_reopen < load_close < load_critical <= 1000`, and `latency_reopen_ms < latency_close_ms < latency_critical_ms`.
 A malformed file makes every spawn refuse with the reason, while the watchdog loop keeps protecting on the defaults and reports the problem once.
 
 `bin/fm-memory-watchdog.sh status` prints each gate with its reading, reservations, every gate's lines, the job ceilings, any throttle, the flagship, deferred work, whether the watchdog loop is running, the history's extent, and its recent events.
-The gate records and latency probes are machine-wide, kept in the local root home's `state/`, so every home on one machine shares one set of gates; deferred work, events, history, and throttles stay in each home, and each home throttles only its own workers.
+The gate records, latency probes, and connection traffic samples are machine-wide, kept in the local root home's `state/`, so every home on one machine shares one set of gates; deferred work, events, history, and throttles stay in each home, and each home throttles only its own workers.
 The watchdog's detached loop is started and kept alive by the watcher and by each spawn, ticks every few seconds so it keeps protecting while the watcher waits for firstmate's next turn, and exits by itself once the home has no task records and no deferred work.
 The script's header owns the exact commands, records, and tuning variables.
 
