@@ -154,7 +154,8 @@ CAPTURE="$ROOT/tests/captures/watchdog-hotspot-2026-10-06"
 # totals; the gate record after it is appended to $H/gates.log.
 feed() {
   [ -f "$P/net/route" ] || set_route
-  printf 'Inter-|   Receive\n face |bytes packets\n  eth0: %s 0 0 0 0 0 0 0 %s 0 0 0 0 0 0 0\n' "$3" "$4" >"$P/net/dev"
+  printf 'Inter-|   Receive\n face |bytes packets\n  %s: %s 0 0 0 0 0 0 0 %s 0 0 0 0 0 0 0\n' \
+    "$(awk 'NR > 1 && $2 == "00000000" { print $1; exit }' "$P/net/route")" "$3" "$4" >"$P/net/dev"
   if [ "$2" = timeout ]; then
     echo "1 packets transmitted, 0 received" >"$H/state/.net-probe.out"
   else
@@ -956,17 +957,17 @@ test_the_same_latency_with_heavy_traffic_is_overload() {
   pass "the same recorded latency while a worker moves 800 KB/s still closes the gate and throttles that worker"
 }
 
-test_a_saturated_slow_uplink_is_overload() {
+# saturated_uplink_counts <case>: a worker pushing 300 KB/s to a public
+# address fills a 2.5 Mbit/s hotspot uplink while little comes down, and
+# latency rises 400 ms above normal; the overload must count.
+saturated_uplink_counts() {
   local t i wbytes=0 out w_cmd
-  new_case uplink
   set_mem 40
-  throttle_case uplink pusher
+  throttle_case "$1" pusher
   w_cmd=$CMD
   t=1790000000
   for i in $(seq 1 10); do printf '%s\t45\n' $((t - 3600 + i * 300)) >>"$H/state/.net-latency"; done
   : >"$H/gates.log"
-  # A worker pushing 300 KB/s fills a 2.5 Mbit/s hotspot uplink while little
-  # comes down, and latency rises 400 ms above normal.
   for i in $(seq 1 20); do
     t=$((t + 6))
     wbytes=$((wbytes + 300 * 6 * 1024))
@@ -978,7 +979,25 @@ test_a_saturated_slow_uplink_is_overload() {
   assert_contains "$out" "while firstmate's workers carry 300 of this machine's 320 KB/s" "the report did not name the worker's upload"
   assert_contains "$out" "so the watchdog is pausing pusher's commands" "the uploading worker was not throttled"
   assert_contains "$(cat "$H/sent.log")" "pusher"$'\t'"Watchdog: the internet connection has been overloaded" "the uploading worker was not told"
+}
+
+test_a_saturated_slow_uplink_is_overload() {
+  new_case uplink
+  saturated_uplink_counts uplink
   pass "a worker filling a slow uplink at 300 KB/s while latency rises 400 ms counts as overload: the gate closes and that worker is throttled"
+}
+
+test_a_saturated_uplink_over_a_vpn_is_overload() {
+  new_case uplinkvpn
+  # A WireGuard default route: no gateway, the tunnel itself is the link.
+  mkdir -p "$P/net"
+  {
+    printf 'Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n'
+    printf 'wg0\t00000000\t00000000\t0001\t0\t0\t0\t00000000\t0\t0\t0\n'
+    printf 'eth0\t0070A8C0\t00000000\t0001\t0\t0\t0\t00F0FFFF\t0\t0\t0\n'
+  } >"$P/net/route"
+  saturated_uplink_counts uplinkvpn
+  pass "a worker filling the uplink at 300 KB/s over a VPN whose default route has no gateway still counts as overload"
 }
 
 test_worker_traffic_to_a_local_peer_is_not_overload() {
@@ -1203,6 +1222,7 @@ test_hotspot_latency_on_an_idle_machine_never_alarms
 test_the_same_latency_with_other_programs_streaming_never_alarms
 test_the_same_latency_with_heavy_traffic_is_overload
 test_a_saturated_slow_uplink_is_overload
+test_a_saturated_uplink_over_a_vpn_is_overload
 test_worker_traffic_to_a_local_peer_is_not_overload
 test_connection_overload_is_one_episode_until_calm
 test_poll_continues_commands_a_dead_loop_left_paused

@@ -73,10 +73,12 @@
 # per socket from `ss -tinpH state established` (FM_WATCHDOG_SS_CMD replaces
 # it in tests), between two samples, credited to the tree owning the socket's
 # first listed process. Only internet traffic counts: an IPv4 peer whose most
-# specific route in <proc>/net/route leaves through a gateway on the measured
-# interface, or a global unicast IPv6 peer (2000::/3), so traffic to
+# specific route in <proc>/net/route is on the measured interface and either
+# leaves through a gateway or is the default route (a VPN or point-to-point
+# link has none), or a global unicast IPv6 peer (2000::/3), so traffic to
 # loopback, a container on a bridge network, or any other directly connected
-# subnet is never attributed. UDP traffic (QUIC) is not attributed. Interface rates come from <proc>/net/dev for net_interface, else
+# subnet is never attributed. UDP traffic (QUIC) is not attributed.
+# Interface rates come from <proc>/net/dev for net_interface, else
 # the default route's interface in <proc>/net/route, else every non-loopback
 # interface summed.
 #
@@ -528,12 +530,12 @@ fm_load_task_net() {
         for (i = 1; i <= 4; i++) if (o[i] - o[i] % (256 - rm[r, i]) != rd[r, i]) ok = 0
         if (ok && (!best || rmask[r] > rmask[best])) best = r
       }
-      return best && rgw[best] && (want != "" ? rif[best] == want : rif[best] != "lo")
+      return best && routed[best] && (want != "" ? rif[best] == want : rif[best] != "lo")
     }
     BEGIN {
       while ((getline l < routes) > 0) {
         if (split(l, f, " ") < 8 || f[2] !~ /^[0-9A-Fa-f]+$/ || length(f[2]) != 8 || f[8] !~ /^[0-9A-Fa-f]+$/ || length(f[8]) != 8) continue
-        nr++; rif[nr] = f[1]; rgw[nr] = (hex(f[3]) != 0); rmask[nr] = 0
+        nr++; rif[nr] = f[1]; routed[nr] = (hex(f[3]) != 0 || hex(f[8]) == 0); rmask[nr] = 0
         for (i = 1; i <= 4; i++) {
           rd[nr, i] = hex(substr(f[2], 9 - 2 * i, 2)); rm[nr, i] = hex(substr(f[8], 9 - 2 * i, 2))
           rmask[nr] = rmask[nr] * 256 + rm[nr, i]
