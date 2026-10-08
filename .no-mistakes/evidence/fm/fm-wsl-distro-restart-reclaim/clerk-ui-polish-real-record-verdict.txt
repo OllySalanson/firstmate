@@ -1,0 +1,25 @@
+# real record: /home/ollys/firstmate/state/clerk-ui-polish.meta (read-only)
+window=fm:fm-clerk-ui-polish
+tmux_boot=7ee46f32-f341-4979-8041-bfcfdbd1b9ab
+tmux_pidns=pid:[4026532212]
+tmux_server_pid=1347
+tmux_server_start=starttime=1633
+tmux_pane_id=%96
+# this process: pid:[4026532218], boot 7ee46f32-f341-4979-8041-bfcfdbd1b9ab, WSL_DISTRO_NAME=Ubuntu
+
+raw agent state of fm:fm-clerk-ui-polish on the live tmux server: missing
+
+verdict without the captain's word (what 'relaunch' / 'exit' acts on):
+unproven	this process numbers pids in a different namespace (pid:[4026532218]) from the one the endpoint was recorded in (pid:[4026532212]), so the recorded tmux server pid cannot be checked from here; if the captain has explicitly said this Linux system restarted since (a WSL2 distro restart) and the window is gone, pass --captain-confirms-endpoint-gone on their word
+
+verdict with --captain-confirms-endpoint-gone:
+confirmed	the captain confirmed it is gone: this process numbers pids in a different namespace (pid:[4026532218]) from the one the endpoint was recorded in (pid:[4026532212]), so the recorded tmux server pid cannot be checked from here
+
+identity a fresh spawn/relaunch from this distro would now record (fm_backend_tmux_endpoint_identity fm:claude):
+tmux_boot=7ee46f32-f341-4979-8041-bfcfdbd1b9ab
+tmux_pidns=pid:[4026532218]
+tmux_pidns_init_start=20107461
+tmux_system=20dae8fda82a46c5b9270f9f25468af8/Ubuntu
+tmux_server_pid=1223
+tmux_server_start=starttime=20111713
+tmux_pane_id=%0
