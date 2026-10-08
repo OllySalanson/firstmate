@@ -4695,8 +4695,19 @@ if (JSON.stringify(actualRow.render(100)) !== JSON.stringify(stockRow.render(100
 }
 
 pi.events.emit("firstmate:calm-presentation", { active: true, stockExportRendering: true });
-const stockHtml = createToolHtmlRenderer({ getToolDefinition: () => stockDefinition, theme, cwd: process.cwd() });
-const actualHtml = createToolHtmlRenderer({ getToolDefinition: () => actualDefinition, theme, cwd: process.cwd() });
+// Pi 1.0.1 renamed the exporter's lookup from getToolDefinition to
+// getToolRenderers; supplying both keeps these renderers on the real lookup
+// for every supported Pi, so the undefined checks below cannot pass merely
+// because a renamed key made the exporter throw and return nothing.
+const exportHtmlRenderer = (definition) =>
+  createToolHtmlRenderer({
+    getToolRenderers: () => definition,
+    getToolDefinition: () => definition,
+    theme,
+    cwd: process.cwd(),
+  });
+const stockHtml = exportHtmlRenderer(stockDefinition);
+const actualHtml = exportHtmlRenderer(actualDefinition);
 const stockCall = stockHtml.renderCall("stock-html", "fm_branch_outcomes", args);
 const actualCall = actualHtml.renderCall("actual-html", "fm_branch_outcomes", args);
 const stockResult = stockHtml.renderResult("stock-html", "fm_branch_outcomes", result.content, result.details, false);
