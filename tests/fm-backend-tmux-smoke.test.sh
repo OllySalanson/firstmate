@@ -30,11 +30,13 @@ command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not found"; exit 0; }
 REAL_TMUX=$(command -v tmux)
 SOCKET="fm-backend-smoke-$$"
 SHIM_DIR=
+NS_JOB=
 trap cleanup_all EXIT
 
 cleanup_all() {
   env -u TMUX -u TMUX_PANE "$REAL_TMUX" -L "$SOCKET" -f /dev/null kill-server >/dev/null 2>&1 || true
   env -u TMUX -u TMUX_PANE "$REAL_TMUX" -L "$SOCKET-other" -f /dev/null kill-server >/dev/null 2>&1 || true
+  [ -n "${NS_JOB:-}" ] && kill "$NS_JOB" 2>/dev/null
   [ -n "${SHIM_DIR:-}" ] && rm -rf "$SHIM_DIR"
 }
 
@@ -423,6 +425,97 @@ case "$proof" in
   *) fail "a window whose server exited should be proven gone: $proof" ;;
 esac
 pass "real tmux: a window whose server process exited is proven gone"
+
+if [ "$(readlink /proc/self/ns/user 2>/dev/null)" = 'user:[4026531837]' ] \
+  && [ "$(readlink /proc/self/ns/time 2>/dev/null)" = 'time:[4026531834]' ]; then
+  # Recorded from the initial namespaces, the window carries the kernel start
+  # of this pid namespace's pid 1: the Linux system incarnation it lives in.
+  INIT_START=$(awk '{ sub(/.*\) /, ""); print $20 }' /proc/1/stat)
+  [ "$(fm_backend_meta_exact_value "$ABS_META" tmux_pidns_init_start)" = "$INIT_START" ] \
+    || fail "the recorded identity should carry this namespace's pid 1 start ($INIT_START): $(cat "$ABS_META")"
+  SYSTEM_ID="$(cat /etc/machine-id 2>/dev/null)${WSL_DISTRO_NAME:+/$WSL_DISTRO_NAME}"
+  [ "$(fm_backend_meta_exact_value "$ABS_META" tmux_system)" = "$SYSTEM_ID" ] \
+    || fail "the recorded identity should name this system ($SYSTEM_ID): $(cat "$ABS_META")"
+  pass "real tmux: a window recorded in the initial namespaces names its Linux system and incarnation"
+
+  # A WSL2 distro restart, judged by the real kernel reads: a record from
+  # another pid namespace whose own pid 1 and tmux server both started before
+  # this namespace's pid 1 did.
+  RESTART_META="$SHIM_DIR/restart.meta"
+  printf 'tmux_boot=%s\ntmux_pidns=pid:[1]\ntmux_pidns_init_start=0\ntmux_system=%s\ntmux_server_pid=%s\ntmux_server_start=starttime=0\ntmux_pane_id=%%1\n' \
+    "$(cat /proc/sys/kernel/random/boot_id)" "$SYSTEM_ID" "$SERVER_PID" > "$RESTART_META"
+  proof=$(absence_proof "$RESTART_META")
+  case "$proof" in
+    "gone "*"has restarted on this same boot (a WSL2 distro restart)"*"$(readlink /proc/self/ns/pid)"*"tick $INIT_START"*) ;;
+    *) fail "a window from an earlier Linux system incarnation on this boot should be proven gone: $proof" ;;
+  esac
+  pass "real tmux: a window from an earlier Linux system incarnation on an unchanged boot is proven gone"
+
+  # The same record from another system sharing this kernel, such as a second
+  # WSL2 distro, proves nothing.
+  sed 's|^tmux_system=.*|tmux_system=ffffffffffffffffffffffffffffffff/OtherDistro|' "$RESTART_META" > "$RESTART_META.other"
+  proof=$(absence_proof "$RESTART_META.other")
+  case "$proof" in
+    "foreign "*"different namespace"*) ;;
+    *) fail "a later pid namespace of another system must not be proven gone: $proof" ;;
+  esac
+  pass "real tmux: a later pid namespace of another system on this kernel is never proven gone"
+else
+  echo "skip - not in the initial user and time namespaces; the restart incarnation case is pinned by tests/fm-control-relaunch.test.sh"
+fi
+
+# A window recorded inside an unprivileged sandbox nested in this still-running
+# system, judged from outside it: it carries no incarnation, and its pid
+# namespace is not this one, so it is never proven gone.
+NS_DIR="$SHIM_DIR/pidns"
+if [ -e /proc/self/ns/pid ] && command -v unshare >/dev/null 2>&1 \
+  && unshare --user --map-root-user --pid --fork --kill-child --mount-proc true 2>/dev/null; then
+  mkdir -p "$NS_DIR"
+  cat > "$NS_DIR/inner.sh" <<'SH'
+#!/usr/bin/env bash
+# Runs as pid 1 of the sandbox: its own tmux server on its own socket, a
+# recorded window, then a wait until told to end.
+set -u
+root=$1 dir=$2 real_tmux=$3
+mkdir -p "$dir/bin"
+printf '#!/usr/bin/env bash\nexec env -u TMUX -u TMUX_PANE %q -S %q -f /dev/null "$@"\n' "$real_tmux" "$dir/sock" > "$dir/bin/tmux"
+chmod +x "$dir/bin/tmux"
+PATH="$dir/bin:$PATH"
+. "$root/bin/fm-backend.sh"
+fm_backend_source tmux || exit 1
+tmux new-session -d -s ns -x 100 -y 30 || exit 1
+fm_backend_tmux_create_task ns fm-ns "$HOME" >/dev/null || exit 1
+fm_backend_tmux_endpoint_identity ns:fm-ns > "$dir/meta.tmp" || exit 1
+mv "$dir/meta.tmp" "$dir/meta"
+while [ ! -e "$dir/stop" ] && [ -d "$dir" ]; do sleep 0.1; done
+tmux kill-server
+SH
+  chmod +x "$NS_DIR/inner.sh"
+  unshare --user --map-root-user --pid --fork --kill-child --mount-proc \
+    "$NS_DIR/inner.sh" "$ROOT" "$NS_DIR" "$REAL_TMUX" &
+  NS_JOB=$!
+  i=0
+  while [ ! -s "$NS_DIR/meta" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  NS_META="$NS_DIR/meta"
+  [ -s "$NS_META" ] || fail "the window inside the sandbox was never recorded"
+  NS_PIDNS=$(fm_backend_meta_exact_value "$NS_META" tmux_pidns) \
+    || fail "the window recorded in the sandbox carries no namespace: $(cat "$NS_META")"
+  [ "$NS_PIDNS" != "$(readlink /proc/self/ns/pid)" ] \
+    || fail "the window should have been recorded in a different pid namespace: $NS_PIDNS"
+  ! fm_backend_meta_exact_value "$NS_META" tmux_pidns_init_start >/dev/null 2>&1 \
+    || fail "a sandbox with its own user namespace must not record an incarnation: $(cat "$NS_META")"
+  proof=$(absence_proof "$NS_META")
+  case "$proof" in
+    "foreign "*"different namespace ($(readlink /proc/self/ns/pid))"*"($NS_PIDNS)"*) ;;
+    *) fail "a window in a sandbox that is still running must not be proven gone: $proof" ;;
+  esac
+  pass "real tmux: a window recorded in a running sandbox's pid namespace is never proven gone"
+  : > "$NS_DIR/stop"
+  wait "$NS_JOB" || fail "the sandbox did not end cleanly"
+  NS_JOB=
+else
+  echo "skip - no unprivileged pid namespace here; the foreign namespace case is pinned by tests/fm-control-relaunch.test.sh"
+fi
 
 if [ -r /proc/sys/kernel/random/boot_id ] && [ -e /proc/self/ns/pid ]; then
   # A restart, staged by presenting a different boot identity beside the real

@@ -84,7 +84,7 @@ Switching harness is therefore one ordinary relaunch rather than a separate mech
 
 ### Reclaiming a task whose endpoint is gone
 
-A Herdr pane or workspace can be destroyed out from under a live task by churn or a session restart, and a machine restart takes every tmux window with it.
+A Herdr pane or workspace can be destroyed out from under a live task by churn or a session restart, and a machine restart - or a WSL2 distro restart - takes every tmux window with it.
 The task's worktree, branch, commits, and uncommitted changes all survive that; only its terminal does not.
 Reclaim covers Herdr and tmux; the other backends have no recovery-grade classifier and refuse both verbs before any absence question arises.
 
@@ -102,12 +102,21 @@ An unreachable endpoint can still hold the live agent a rebind would duplicate, 
   That server start is a real side effect, and the parenthetical above does not cover it: when the recorded session's server no longer exists at all, the probe stands a fresh empty one up in order to ask, and nothing afterwards uses it.
   So in that state `exit` - which otherwise reads as a read-only inspection - leaves an idle herdr server behind.
 - **tmux proves it from the record, not from a read.** `list-windows -a` describes only the tmux server the *current process* addresses (its `TMUX_TMPDIR`/socket), so a different but running server would answer "not anywhere" about a window it was never able to see.
-  Each spawn and relaunch therefore records the window's endpoint identity: the kernel boot it was created in, the tmux server process holding it (pid, pid namespace, and kernel start time), and the server-unique id of the agent's pane, which survives renames and `join-pane`, `move-pane`, and `break-pane` (`bin/backends/tmux.sh` owns the fields and the proof).
+  Each spawn and relaunch therefore records the window's endpoint identity: the kernel boot it was created in, the tmux server process holding it (pid, pid namespace, and kernel start time), the kernel start time of that pid namespace's pid 1 (the Linux system incarnation it ran in) together with which Linux system that is (its `/etc/machine-id`, plus its WSL2 distro name where WSL sets one), and the server-unique id of the agent's pane, which survives renames and `join-pane`, `move-pane`, and `break-pane` (`bin/backends/tmux.sh` owns the fields and the proof).
   The window is proven gone when the machine has restarted since (a different boot identity), when that server process no longer exists or its pid now names a later process, or when that server is the one this process addresses and its own pane inventory no longer holds that pane id.
-  Everything else refuses: a window that only moved or was renamed on its server, an agent pane joined into another window, a recorded server still running on a socket this process does not address, a pid namespace that differs from the recorded one, and every record written before the identity existed.
+  It is also proven gone when the Linux system around it restarted on the same boot, which is what a WSL2 distro restart (`wsl --terminate`, or the distro crashing) leaves behind: the VM kernel, and with it the boot identity, survives that restart, but every process of the distro ends and the distro comes back in a new pid namespace.
+  That proof compares the recorded pid 1 start time with this pid namespace's own: a different pid namespace of the **same** Linux system whose pid 1 started after the recorded tmux server did is a later incarnation, so the server is gone.
+  Another system sharing the kernel - a second WSL2 distro, which has its own machine id and distro name - is never read as a later incarnation, so a different or missing system identity refuses (sharing one firstmate home between distros is not supported).
+  Both start times are kernel clock ticks since boot, and the pid 1 start time is read and recorded only from the initial user and time namespaces, so an unprivileged sandbox nested inside a still-running distro never records it or reads as a restart.
+  Everything else refuses: a window that only moved or was renamed on its server, an agent pane joined into another window, a recorded server still running on a socket this process does not address, a different pid namespace that cannot be shown to be a later incarnation, and every record written before the identity existed.
   Wall-clock comparisons are deliberately not part of the proof, because a stepped clock (observed on WSL2 after host sleep) could date a live window to before the current boot.
 
 Every transient or self-contradicting read stays `unreadable` or `ambiguous` and still refuses, so a momentary backend failure can never be mistaken for absence.
+
+A record written before the pid 1 start time was recorded cannot be proven gone after a WSL2 distro restart: it names only a pid namespace this process cannot see into, which on a shared WSL2 kernel may belong to another distro that is still running.
+For that state - and any other pid namespace on this boot that cannot be shown to be a later incarnation of the recorded system - `exit` and `relaunch` accept `--captain-confirms-endpoint-gone`, **only on the captain's explicit word** that the distro restarted and the window is gone - never on an agent's own judgement.
+It applies only to a tmux record that carries a full server identity from this same boot in a pid namespace other than this process's; every other unproven state still refuses with it, including a record with no endpoint identity, a recorded server still running on a socket this process does not address, a window that only moved, and an unreadable read.
+When it decides the outcome, `exit` reports `endpoint-gone`, `relaunch` re-creates the window exactly as for a proven-gone one, and a `note:` line naming the captain's confirmation is appended to the task's status log (`state/<id>.status`); the worktree and every uncommitted change are kept as always.
 
 That proof has one owner for the whole control plane (`fm_control_endpoint_absence_verdict` in `bin/fm-control-lib.sh`), so `exit` and `relaunch` cannot reach two different answers about one endpoint.
 `exit` reports what the proof established and nothing more - see its row in the verb table above.
