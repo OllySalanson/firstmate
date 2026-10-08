@@ -299,7 +299,8 @@ fm_control_backend_state_verified() {  # <backend>
 #     instead from the endpoint identity the record carries - the kernel boot,
 #     the tmux server process, and the agent's pane id it was created with -
 #     which bin/backends/tmux.sh's fm_backend_tmux_endpoint_absence_proof owns:
-#     a different boot, an exited server, or a pane id missing from the
+#     a different boot, an exited server, an ended pid namespace (a WSL2
+#     distro restart on an unchanged boot), or a pane id missing from the
 #     recorded server's own pane inventory is `gone`; anything less, including every
 #     record written before that identity existed, stays `unproven`.
 #

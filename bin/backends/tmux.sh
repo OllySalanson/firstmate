@@ -453,7 +453,14 @@ fm_backend_tmux_agent_alive() {  # <target>
 #                       every process of the recorded one - the tmux server and
 #                       the agent with it - is gone.
 #   tmux_pidns=         the pid namespace those pids are numbered in (Linux
-#                       only; absent where the platform has none).
+#                       only; absent where the platform has none). When it
+#                       differs from this process's, its pids cannot be read
+#                       here, but the namespace itself can be proven ENDED
+#                       (fm_backend_tmux_namespace_released), which ends every
+#                       process numbered in it - the case a WSL2 distro restart
+#                       leaves behind, since the VM kernel and its boot id
+#                       survive that restart while the distro's pid namespace
+#                       does not.
 #   tmux_server_pid=    the server process that holds the window, and
 #   tmux_server_start=  that process's kernel start identity. Within one boot
 #                       and namespace a pid plus its start identity names one
@@ -539,6 +546,47 @@ fm_backend_tmux_process_start() {  # <pid>
   return 1
 }
 
+# fm_backend_tmux_namespace_released <ns-link>: prove that the namespace a
+# recorded /proc/<pid>/ns link text names (`pid:[N]`) no longer exists, by
+# having the kernel hand the number N to a brand-new namespace. Within one boot
+# every live namespace of every type holds a distinct number from one shared
+# kernel allocator, and a pid namespace gives its number back only when it is
+# destroyed - which cannot happen while any process numbered in it (or in a
+# namespace nested inside it) still exists, because each holds a reference to
+# it. So N handed to a fresh namespace proves the recorded one, and every
+# process it ever numbered, is gone. Returns 0 only on that proof; returns 1
+# when it could not be made: N is still taken (the namespace may be alive), the
+# kernel had not yet reclaimed it (namespaces are freed asynchronously), or
+# fresh unprivileged user namespaces are unavailable here. Fresh namespaces are
+# probed nested so each earlier one stays allocated and the next draws a new
+# number, up to the kernel's own nesting limit; they all end with the probe.
+# The caller must already have established that the boot is the recorded one.
+fm_backend_tmux_namespace_released() {  # <ns-link>
+  local link=${1-} want proc_root=${FM_TMUX_PROC_ROOT_OVERRIDE:-${FM_PROC_ROOT_OVERRIDE:-/proc}} probe out
+  case "$link" in *':['*']') ;; *) return 1 ;; esac
+  want=${link#*:\[}
+  want=${want%\]}
+  case "$want" in ''|*[!0-9]*) return 1 ;; esac
+  command -v unshare >/dev/null 2>&1 || return 1
+  # Runs inside each fresh namespace: report a hit, or nest one more fresh
+  # namespace while this one stays allocated, until the number is reached,
+  # passed, or the depth budget runs out. Stopping once the number is passed
+  # only saves work; a miss proves nothing either way.
+  # shellcheck disable=SC2016  # expanded by the probe's own shell, not here
+  probe='n=$(readlink "$FM_TMUX_NS_SELF") || exit 1
+case "$n" in "user:[$FM_TMUX_NS_WANT]") echo released; exit 0 ;; esac
+n=${n#user:\[}; n=${n%\]}
+case "$n" in ""|*[!0-9]*) exit 1 ;; esac
+[ "$n" -lt "$FM_TMUX_NS_WANT" ] || exit 1
+FM_TMUX_NS_LEFT=$((FM_TMUX_NS_LEFT - 1))
+[ "$FM_TMUX_NS_LEFT" -gt 0 ] || exit 1
+export FM_TMUX_NS_LEFT
+exec unshare --user --map-root-user sh -c "$1" fm-tmux-ns-probe "$1"'
+  out=$(FM_TMUX_NS_WANT=$want FM_TMUX_NS_LEFT=32 FM_TMUX_NS_SELF="$proc_root/self/ns/user" \
+    unshare --user --map-root-user sh -c "$probe" fm-tmux-ns-probe "$probe" 2>/dev/null) || return 1
+  [ "$out" = released ]
+}
+
 # fm_backend_tmux_endpoint_identity <target>: the identity lines above for the
 # live pane <target> names, ready to append to a task record. Prints nothing
 # and returns 1 when the boot identity is unreadable; the server and pane
@@ -592,7 +640,13 @@ fm_backend_tmux_endpoint_absence_proof() {  # <meta>
   rec_ns=$(fm_backend_meta_exact_value "$meta" tmux_pidns 2>/dev/null) || rec_ns=
   ns=$(fm_backend_tmux_pidns) || ns='<unreadable>'
   if [ "$ns" != "$rec_ns" ]; then
-    printf 'unproven\tthis process numbers pids in a different namespace (%s) from the one the endpoint was recorded in (%s), so the recorded tmux server pid cannot be checked from here' "${ns:-none}" "${rec_ns:-none}"
+    # Its pids cannot be read from here, but the whole namespace can be proven
+    # ended - what a WSL2 distro restart leaves behind on an unchanged boot.
+    if [ "$ns" != '<unreadable>' ] && fm_backend_tmux_namespace_released "$rec_ns"; then
+      printf 'gone\tthe pid namespace it was created in (%s) has ended - the kernel has since given its number to a new namespace - so the tmux server that held it (pid %s) and every process with it are gone' "$rec_ns" "$rec_pid"
+      return 0
+    fi
+    printf 'unproven\tthis process numbers pids in a different namespace (%s) from the one the endpoint was recorded in (%s), so the recorded tmux server pid cannot be checked from here, and that namespace could not be proven to have ended' "${ns:-none}" "${rec_ns:-none}"
     return 0
   fi
   rc=0

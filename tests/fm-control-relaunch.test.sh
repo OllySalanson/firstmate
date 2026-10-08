@@ -200,6 +200,21 @@ esac
 exit 0
 SH
   chmod +x "$fb/tmux"
+  # A fresh user namespace without the kernel: the Nth nested call is handed
+  # the Nth number listed in fresh-ns, through the staged /proc/self/ns/user
+  # the namespace-ended proof reads; with no number left, creation fails as an
+  # unavailable user namespace does. No case reaches the real kernel's numbers.
+  cat > "$fb/unshare" <<'SH'
+#!/usr/bin/env bash
+FM_FAKE_NS_DEPTH=$(( ${FM_FAKE_NS_DEPTH:-0} + 1 ))
+export FM_FAKE_NS_DEPTH
+n=$(sed -n "${FM_FAKE_NS_DEPTH}p" "$FM_FAKE_DIR/fresh-ns" 2>/dev/null)
+[ -n "$n" ] || { echo 'unshare: unshare failed: Operation not permitted' >&2; exit 1; }
+while [ $# -gt 0 ] && [ "${1#-}" != "$1" ]; do shift; done
+ln -sfn "user:[$n]" "$FM_TMUX_PROC_ROOT_OVERRIDE/self/ns/user"
+exec "$@"
+SH
+  chmod +x "$fb/unshare"
   cat > "$fb/sleep" <<'SH'
 #!/usr/bin/env bash
 [ -z "${FM_FAKE_LOCK_WAITING:-}" ] || : > "$FM_FAKE_LOCK_WAITING"
@@ -2199,6 +2214,8 @@ test_tmux_refuses_a_server_pid_read_from_another_namespace() {
   dir=$(new_case tmux-pidns rl70)
   add_ship_task "$dir" rl70 claude
   record_tmux_identity "$dir" rl70 boot-now 4242 500 %3 'pid:[4026532000]'
+  # No fresh namespace can be had here, so the recorded one cannot be proven
+  # to have ended either.
   stage_proc_pid "$dir" 4242
   : > "$dir/fake/server-dead"
   assert_tmux_missing_refuses "$dir" rl70 "different pid namespace"
@@ -2206,6 +2223,47 @@ test_tmux_refuses_a_server_pid_read_from_another_namespace() {
   expect_code 1 "$rc" "a foreign pid namespace must refuse"
   assert_contains "$out" "different namespace" "the refusal should name the namespace mismatch"
   pass "tmux: a server pid recorded in another pid namespace is never read as exited"
+}
+
+# A WSL2 distro restart: the VM kernel, and so the boot id, survive it, but the
+# distro comes back in a new pid namespace and the one the window was recorded
+# in is destroyed with every process numbered in it.
+test_tmux_reclaims_a_window_whose_pid_namespace_ended() {
+  local dir
+  dir=$(new_case tmux-pidns-ended rl75)
+  add_ship_task "$dir" rl75 claude
+  record_tmux_identity "$dir" rl75 boot-now 1347 1633 %96 'pid:[4026532212]'
+  stage_proc "$dir" boot-now 'pid:[4026532218]'
+  # The recorded pid names an unrelated process in the new namespace, and only
+  # a fresh server exists there; neither may be read as the recorded one.
+  stage_proc_pid "$dir" 1347 20107500
+  : > "$dir/fake/server-dead"
+  printf '' > "$dir/fake/addressed-pid"
+  # Two numbers still taken below it come first, then the kernel hands a fresh
+  # namespace the recorded one's number.
+  printf '4026532199\n4026532205\n4026532212\n' > "$dir/fake/fresh-ns"
+  printf 'dirty, never committed\n' > "$dir/wt/dirty.txt"
+  assert_tmux_reclaimed "$dir" rl75 "the pid namespace it was created in (pid:[4026532212]) has ended" "pid namespace ended"
+  assert_contains "$(cat "$dir/wt/dirty.txt")" "never committed" "a reclaim must keep uncommitted work"
+  pass "tmux: after a distro restart on an unchanged boot, relaunch reclaims a task whose pid namespace ended"
+}
+
+test_tmux_refuses_a_pid_namespace_whose_number_is_still_taken() {
+  local dir out rc
+  dir=$(new_case tmux-pidns-alive rl76)
+  add_ship_task "$dir" rl76 claude
+  record_tmux_identity "$dir" rl76 boot-now 1347 1633 %96 'pid:[4026532212]'
+  stage_proc "$dir" boot-now 'pid:[4026532218]'
+  stage_proc_pid "$dir" 1347
+  : > "$dir/fake/server-dead"
+  # Every fresh namespace draws some other number: the recorded namespace may
+  # still be alive somewhere this process cannot see, its server with it.
+  printf '4026532205\n4026532219\n' > "$dir/fake/fresh-ns"
+  assert_tmux_missing_refuses "$dir" rl76 "pid namespace number still taken"
+  out=$(run_spawn "$dir" rl76 --relaunch --harness claude); rc=$?
+  expect_code 1 "$rc" "a pid namespace not proven ended must refuse"
+  assert_contains "$out" "could not be proven to have ended" "the refusal should say the namespace was not proven ended"
+  pass "tmux: a recorded pid namespace whose number no fresh namespace can take is never read as ended"
 }
 
 test_tmux_refuses_a_same_boot_record_without_server_identity() {
@@ -2904,6 +2962,8 @@ test_tmux_reclaims_a_window_closed_on_its_running_server
 test_tmux_refuses_a_window_that_only_moved_on_its_server
 test_tmux_refuses_when_its_running_server_is_not_the_addressed_one
 test_tmux_refuses_a_server_pid_read_from_another_namespace
+test_tmux_reclaims_a_window_whose_pid_namespace_ended
+test_tmux_refuses_a_pid_namespace_whose_number_is_still_taken
 test_tmux_refuses_a_same_boot_record_without_server_identity
 test_tmux_legacy_record_refusal_names_the_missing_identity
 test_tmux_relaunch_records_the_adopted_window_identity

@@ -84,7 +84,7 @@ Switching harness is therefore one ordinary relaunch rather than a separate mech
 
 ### Reclaiming a task whose endpoint is gone
 
-A Herdr pane or workspace can be destroyed out from under a live task by churn or a session restart, and a machine restart takes every tmux window with it.
+A Herdr pane or workspace can be destroyed out from under a live task by churn or a session restart, and a machine restart - or a WSL2 distro restart - takes every tmux window with it.
 The task's worktree, branch, commits, and uncommitted changes all survive that; only its terminal does not.
 Reclaim covers Herdr and tmux; the other backends have no recovery-grade classifier and refuse both verbs before any absence question arises.
 
@@ -104,7 +104,10 @@ An unreachable endpoint can still hold the live agent a rebind would duplicate, 
 - **tmux proves it from the record, not from a read.** `list-windows -a` describes only the tmux server the *current process* addresses (its `TMUX_TMPDIR`/socket), so a different but running server would answer "not anywhere" about a window it was never able to see.
   Each spawn and relaunch therefore records the window's endpoint identity: the kernel boot it was created in, the tmux server process holding it (pid, pid namespace, and kernel start time), and the server-unique id of the agent's pane, which survives renames and `join-pane`, `move-pane`, and `break-pane` (`bin/backends/tmux.sh` owns the fields and the proof).
   The window is proven gone when the machine has restarted since (a different boot identity), when that server process no longer exists or its pid now names a later process, or when that server is the one this process addresses and its own pane inventory no longer holds that pane id.
-  Everything else refuses: a window that only moved or was renamed on its server, an agent pane joined into another window, a recorded server still running on a socket this process does not address, a pid namespace that differs from the recorded one, and every record written before the identity existed.
+  It is also proven gone when the recorded pid namespace differs from this process's and has **ended**, which is what a WSL2 distro restart (`wsl --terminate`, or the distro crashing) leaves behind: the VM kernel, and with it the boot identity, survives that restart, but the distro comes back in a new pid namespace.
+  The recorded server's pid cannot be read across namespaces, so the proof is a kernel fact instead: every live namespace holds a distinct number from one allocator, and a pid namespace gives its number back only once every process numbered in it is gone, so a brand-new user namespace being handed the recorded namespace's number proves the server and every process with it ended.
+  The probe creates only short-lived unprivileged user namespaces, nested so each draws a fresh number, and ends them all before it returns; where those are unavailable the namespace cannot be proven ended and the window stays unproven.
+  Everything else refuses: a window that only moved or was renamed on its server, an agent pane joined into another window, a recorded server still running on a socket this process does not address, a different pid namespace whose number is still taken (it may still be alive where this process cannot see it), and every record written before the identity existed.
   Wall-clock comparisons are deliberately not part of the proof, because a stepped clock (observed on WSL2 after host sleep) could date a live window to before the current boot.
 
 Every transient or self-contradicting read stays `unreadable` or `ambiguous` and still refuses, so a momentary backend failure can never be mistaken for absence.

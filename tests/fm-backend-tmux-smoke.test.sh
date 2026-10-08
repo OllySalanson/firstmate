@@ -30,11 +30,13 @@ command -v tmux >/dev/null 2>&1 || { echo "skip: tmux not found"; exit 0; }
 REAL_TMUX=$(command -v tmux)
 SOCKET="fm-backend-smoke-$$"
 SHIM_DIR=
+NS_JOB=
 trap cleanup_all EXIT
 
 cleanup_all() {
   env -u TMUX -u TMUX_PANE "$REAL_TMUX" -L "$SOCKET" -f /dev/null kill-server >/dev/null 2>&1 || true
   env -u TMUX -u TMUX_PANE "$REAL_TMUX" -L "$SOCKET-other" -f /dev/null kill-server >/dev/null 2>&1 || true
+  [ -n "${NS_JOB:-}" ] && kill "$NS_JOB" 2>/dev/null
   [ -n "${SHIM_DIR:-}" ] && rm -rf "$SHIM_DIR"
 }
 
@@ -423,6 +425,75 @@ case "$proof" in
   *) fail "a window whose server exited should be proven gone: $proof" ;;
 esac
 pass "real tmux: a window whose server process exited is proven gone"
+
+# A WSL2 distro restart, for real: the window is recorded from inside a fresh
+# pid namespace on this same boot and judged from outside it, as a distro that
+# came back in a new namespace judges its previous incarnation's windows.
+NS_DIR="$SHIM_DIR/pidns"
+if [ -e /proc/self/ns/pid ] && command -v unshare >/dev/null 2>&1 \
+  && unshare --user --map-root-user --pid --fork --kill-child --mount-proc true 2>/dev/null; then
+  mkdir -p "$NS_DIR"
+  cat > "$NS_DIR/inner.sh" <<'SH'
+#!/usr/bin/env bash
+# Runs as pid 1 of the fresh namespace: its own tmux server on its own socket,
+# a recorded window, then a wait until told to end the namespace.
+set -u
+root=$1 dir=$2 real_tmux=$3
+mkdir -p "$dir/bin"
+printf '#!/usr/bin/env bash\nexec env -u TMUX -u TMUX_PANE %q -S %q -f /dev/null "$@"\n' "$real_tmux" "$dir/sock" > "$dir/bin/tmux"
+chmod +x "$dir/bin/tmux"
+PATH="$dir/bin:$PATH"
+. "$root/bin/fm-backend.sh"
+fm_backend_source tmux || exit 1
+tmux new-session -d -s ns -x 100 -y 30 || exit 1
+fm_backend_tmux_create_task ns fm-ns "$HOME" >/dev/null || exit 1
+fm_backend_tmux_endpoint_identity ns:fm-ns > "$dir/meta.tmp" || exit 1
+mv "$dir/meta.tmp" "$dir/meta"
+while [ ! -e "$dir/stop" ] && [ -d "$dir" ]; do sleep 0.1; done
+tmux kill-server
+SH
+  chmod +x "$NS_DIR/inner.sh"
+  unshare --user --map-root-user --pid --fork --kill-child --mount-proc \
+    "$NS_DIR/inner.sh" "$ROOT" "$NS_DIR" "$REAL_TMUX" &
+  NS_JOB=$!
+  i=0
+  while [ ! -s "$NS_DIR/meta" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  NS_META="$NS_DIR/meta"
+  [ -s "$NS_META" ] || fail "the window inside the fresh pid namespace was never recorded"
+  NS_PIDNS=$(fm_backend_meta_exact_value "$NS_META" tmux_pidns) \
+    || fail "the window recorded in the fresh pid namespace carries no namespace: $(cat "$NS_META")"
+  [ "$NS_PIDNS" != "$(readlink /proc/self/ns/pid)" ] \
+    || fail "the window should have been recorded in a different pid namespace: $NS_PIDNS"
+  [ "$(fm_backend_meta_exact_value "$NS_META" tmux_boot)" = "$(cat /proc/sys/kernel/random/boot_id)" ] \
+    || fail "the window should have been recorded on this same boot: $(cat "$NS_META")"
+  proof=$(absence_proof "$NS_META")
+  case "$proof" in
+    "unproven "*"different namespace"*"could not be proven to have ended"*) ;;
+    *) fail "a window whose pid namespace is still alive must not be proven gone: $proof" ;;
+  esac
+  pass "real tmux: a window recorded in another pid namespace that is still alive is never proven gone"
+
+  : > "$NS_DIR/stop"
+  wait "$NS_JOB" || fail "the fresh pid namespace did not end cleanly"
+  NS_JOB=
+  # The kernel frees an ended namespace's number asynchronously, so the proof
+  # is retried until it lands.
+  i=0
+  while :; do
+    proof=$(absence_proof "$NS_META")
+    case "$proof" in "gone "*) break ;; esac
+    [ "$i" -lt 100 ] || break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  case "$proof" in
+    "gone "*"the pid namespace it was created in ($NS_PIDNS) has ended"*) ;;
+    *) fail "a window whose pid namespace ended on this same boot should be proven gone: $proof" ;;
+  esac
+  pass "real tmux: a window whose pid namespace ended on an unchanged boot is proven gone"
+else
+  echo "skip - no unprivileged pid namespace here; the namespace-ended case is pinned by tests/fm-control-relaunch.test.sh"
+fi
 
 if [ -r /proc/sys/kernel/random/boot_id ] && [ -e /proc/self/ns/pid ]; then
   # A restart, staged by presenting a different boot identity beside the real
