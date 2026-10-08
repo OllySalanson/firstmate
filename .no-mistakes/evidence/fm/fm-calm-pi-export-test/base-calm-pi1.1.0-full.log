@@ -1,0 +1,17 @@
+ok - Pi calm resolves its persistent home independently of Pi's launch directory
+ok - Pi calm compatibility evidence never rejects a Pi version for being newer than 0.82.0, and still fails closed on a missing or malformed version
+ok - a missing collapsed-thinking presentation API degrades only that Calm adapter with a clear skip reason, while the rest of Calm still registers
+ok - missing Pi presentation class exports reach the independent adapter degradation path
+ok - Calm registers none of its 7 built-in tool wrappers at load while config/calm is off, and all 7 synchronously at load while config/calm is on
+ok - Calm's first same-session /calm activation claims every uncontested built-in, leaves a foreign bash tool fully intact and callable, warns prominently and logs the contested name, and only rows constructed before that activation - the documented bound - fail to retroactively collapse
+not ok - Pi calm renderer and lifecycle contract failed: file:///tmp/fm-calm-pi-extension.TlUxfy/renderer/[eval1]:546
+      throw new Error(`${name} disappeared from ${command} HTML while calm mode was on`);
+            ^
+
+Error: grep disappeared from /export calm.html HTML while calm mode was on
+    at assertStockHtmlRendering (file:///tmp/fm-calm-pi-extension.TlUxfy/renderer/[eval1]:546:13)
+    at file:///tmp/fm-calm-pi-extension.TlUxfy/renderer/[eval1]:553:7
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+
+Node.js v24.20.0
+exit=1
