@@ -114,7 +114,7 @@ An unreachable endpoint can still hold the live agent a rebind would duplicate, 
 Every transient or self-contradicting read stays `unreadable` or `ambiguous` and still refuses, so a momentary backend failure can never be mistaken for absence.
 
 A record written before the pid 1 start time was recorded cannot be proven gone after a WSL2 distro restart: it names only a pid namespace this process cannot see into, which on a shared WSL2 kernel may belong to another distro that is still running.
-For that one state, `exit` and `relaunch` accept `--captain-confirms-endpoint-gone`, **only on the captain's explicit word** that the distro restarted and the window is gone - never on an agent's own judgement.
+For that state - and any other pid namespace on this boot that cannot be shown to be a later incarnation of the recorded system - `exit` and `relaunch` accept `--captain-confirms-endpoint-gone`, **only on the captain's explicit word** that the distro restarted and the window is gone - never on an agent's own judgement.
 It applies only to a tmux record that carries a full server identity from this same boot in a pid namespace other than this process's; every other unproven state still refuses with it, including a record with no endpoint identity, a recorded server still running on a socket this process does not address, a window that only moved, and an unreadable read.
 When it decides the outcome, `exit` reports `endpoint-gone`, `relaunch` re-creates the window exactly as for a proven-gone one, and a `note:` line naming the captain's confirmation is appended to the task's status log (`state/<id>.status`); the worktree and every uncommitted change are kept as always.
 
