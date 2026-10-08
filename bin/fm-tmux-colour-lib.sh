@@ -31,7 +31,9 @@
 # malformed line, an unknown colour, or a failed tmux call prints one warning
 # per problem to stderr and the window launches uncoloured. A matching rule
 # whose colour is invalid ends the lookup uncoloured rather than falling
-# through to a later rule. The file is not inherited into secondmate homes.
+# through to a later rule. The file is inherited into secondmate homes from the
+# primary (bin/fm-config-inherit-lib.sh), so a secondmate's own crewmates are
+# coloured by the same rules.
 
 # fm_tmux_colour_valid <colour>: 0 when tmux accepts <colour> as a colour that
 # is safe to splice into a style string (no comma, space, or other syntax).

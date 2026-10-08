@@ -220,13 +220,16 @@ For example:
 
 ```
 prefix clerk- colour130
+prefix rr-clerk- colour130
 project ready-reckoner colour28
 project firstmate colour245
 ```
 
+Here an `rr-clerk-` task cloned from the ready-reckoner repo is brown, because the prefix rule beats the project rule; any other ready-reckoner task is green.
+
 The colour is applied when `bin/fm-spawn.sh` creates a tmux window for a crewmate, scout, or secondmate, and again on every relaunch; other backends ignore the file, and an absent file changes nothing.
 A bad entry never fails a spawn: it is reported once as a warning and the window launches uncoloured.
-The file is a home-local preference and is not inherited by secondmate homes.
+The file is inherited into secondmate homes through the [primary-authoritative configuration contract](../.agents/skills/secondmate-provisioning/SKILL.md), so a secondmate's own crewmates are coloured by the same rules.
 [`bin/fm-tmux-colour-lib.sh`](../bin/fm-tmux-colour-lib.sh)'s header owns the exact rule matching, accepted colour forms, and the window styles it sets.
 
 ## Fleet activity ledger (config/fleet-ledger)
