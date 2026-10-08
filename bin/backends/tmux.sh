@@ -464,7 +464,15 @@ fm_backend_tmux_agent_alive() {  # <target>
 #                       Linux system around it was restarted - a WSL2 distro
 #                       restart (`wsl --terminate`, or the distro crashing)
 #                       keeps the VM kernel and its boot id but ends every
-#                       process of the distro - so the recorded server is gone.
+#                       process of the distro - so the recorded server is gone,
+#                       but only when tmux_system= also names this system.
+#   tmux_system=        which Linux system that is, recorded with
+#                       tmux_pidns_init_start= and never without it
+#                       (fm_backend_tmux_system_id): its /etc/machine-id, plus
+#                       its WSL2 distro name where WSL sets one. Another
+#                       system that shares the kernel, such as a second WSL2
+#                       distro, is a different one even if its pid 1 started
+#                       later, so a mismatch or a missing value proves nothing.
 #   tmux_server_pid=    the server process that holds the window, and
 #   tmux_server_start=  that process's kernel start identity. Within one boot
 #                       and namespace a pid plus its start identity names one
@@ -484,6 +492,7 @@ fm_backend_tmux_agent_alive() {  # <target>
 # FM_TMUX_PROC_ROOT_OVERRIDE (else FM_PROC_ROOT_OVERRIDE, as in
 # bin/fm-wake-lib.sh) relocates every /proc read here, so a test can stage a
 # restart or an exited server without relocating unrelated process reads.
+# FM_TMUX_MACHINE_ID_OVERRIDE relocates the /etc/machine-id read the same way.
 
 # The current kernel boot identity, or nonzero when the platform exposes none.
 fm_backend_tmux_boot_id() {
@@ -566,13 +575,25 @@ fm_backend_tmux_pidns_init_start() {
   printf '%s\n' "${start#starttime=}"
 }
 
+# This Linux system's identity: its machine id, then `/<distro>` when
+# WSL_DISTRO_NAME names a WSL2 distro. Returns 1 when the machine id cannot be
+# read or either part is malformed.
+fm_backend_tmux_system_id() {
+  local id distro=${WSL_DISTRO_NAME:-}
+  id=$(cat "${FM_TMUX_MACHINE_ID_OVERRIDE:-/etc/machine-id}" 2>/dev/null) || return 1
+  case "$id" in ''|*[!0-9a-f]*) return 1 ;; esac
+  [ "${#id}" -eq 32 ] || return 1
+  case "$distro" in *[!A-Za-z0-9._-]*) return 1 ;; esac
+  printf '%s%s\n' "$id" "${distro:+/$distro}"
+}
+
 # fm_backend_tmux_endpoint_identity <target>: the identity lines above for the
 # live pane <target> names, ready to append to a task record. Prints nothing
 # and returns 1 when the boot identity is unreadable; the server and pane
 # lines are printed only when every one of them was read, so a record never
 # carries half a server identity.
 fm_backend_tmux_endpoint_identity() {  # <target>
-  local target=${1-} boot pidns init ids server_pid pane_id start
+  local target=${1-} boot pidns init system ids server_pid pane_id start
   boot=$(fm_backend_tmux_boot_id) || return 1
   ids=$(fm_tmux_pane_read "$target" '#{pid} #{pane_id}') || ids=
   server_pid=${ids%% *}
@@ -585,7 +606,10 @@ fm_backend_tmux_endpoint_identity() {  # <target>
   start=$(fm_backend_tmux_process_start "$server_pid") || return 0
   if [ -n "$pidns" ]; then
     printf 'tmux_pidns=%s\n' "$pidns"
-    ! init=$(fm_backend_tmux_pidns_init_start) || printf 'tmux_pidns_init_start=%s\n' "$init"
+    if init=$(fm_backend_tmux_pidns_init_start) && system=$(fm_backend_tmux_system_id); then
+      printf 'tmux_pidns_init_start=%s\n' "$init"
+      printf 'tmux_system=%s\n' "$system"
+    fi
   fi
   printf 'tmux_server_pid=%s\n' "$server_pid"
   printf 'tmux_server_start=%s\n' "$start"
@@ -602,7 +626,7 @@ fm_backend_tmux_endpoint_identity() {  # <target>
 # bin/fm-control-lib.sh's fm_control_endpoint_absence_verdict owns how callers
 # act on it.
 fm_backend_tmux_endpoint_absence_proof() {  # <meta>
-  local meta=${1-} rec_boot rec_ns rec_init rec_pid rec_start rec_pane boot ns init start rc addressed panes
+  local meta=${1-} rec_boot rec_ns rec_init rec_system rec_pid rec_start rec_pane boot ns init system start rc addressed panes
   rec_boot=$(fm_backend_meta_exact_value "$meta" tmux_boot 2>/dev/null) || rec_boot=
   if [ -z "$rec_boot" ]; then
     printf 'unproven\ttmux absence cannot be proven from this task record: it carries no endpoint identity (it predates tmux_boot= recording), and a server-wide window inventory only describes the tmux server this process addresses, so a window absent from it may still be alive on another'
@@ -631,12 +655,15 @@ fm_backend_tmux_endpoint_absence_proof() {  # <meta>
   fi
   if [ "$ns" != "$rec_ns" ]; then
     rec_init=$(fm_backend_meta_exact_value "$meta" tmux_pidns_init_start 2>/dev/null) || rec_init=
+    rec_system=$(fm_backend_meta_exact_value "$meta" tmux_system 2>/dev/null) || rec_system=
     case "$rec_init:${rec_start#starttime=}" in
       *[!0-9:]*|:*|*:) ;;
       *)
-        if [ -n "$ns" ] && [ -n "$rec_ns" ] && init=$(fm_backend_tmux_pidns_init_start) \
+        if [ -n "$ns" ] && [ -n "$rec_ns" ] && [ -n "$rec_system" ] \
+           && system=$(fm_backend_tmux_system_id) && [ "$system" = "$rec_system" ] \
+           && init=$(fm_backend_tmux_pidns_init_start) \
            && [ "$init" != "$rec_init" ] && [ "$init" -gt "${rec_start#starttime=}" ]; then
-          printf 'gone\tthe Linux system it was created in has restarted on this same boot (a WSL2 distro restart): it ran in pid namespace %s, whose pid 1 started at tick %s, and this one, %s, began with a pid 1 started at tick %s, after the tmux server that held it (pid %s), so that server is gone' "$rec_ns" "$rec_init" "$ns" "$init" "$rec_pid"
+          printf 'gone\tthe Linux system it was created in (%s) has restarted on this same boot (a WSL2 distro restart): it ran in pid namespace %s, whose pid 1 started at tick %s, and this one, %s, began with a pid 1 started at tick %s, after the tmux server that held it (pid %s), so that server is gone' "$system" "$rec_ns" "$rec_init" "$ns" "$init" "$rec_pid"
           return 0
         fi
         ;;

@@ -226,9 +226,15 @@ new_case() {
   printf '%%9\n' > "$dir/fake/pane-ids"
   stage_proc "$dir" boot-now 'pid:[4026531836]'
   stage_proc_pid "$dir" 4242 500
+  printf '%s\n' "$TEST_MACHINE_ID" > "$dir/machine-id"
   make_tmux_stub "$dir"
   printf '%s\n' "$dir"
 }
+
+# The Linux system every case runs in: its staged /etc/machine-id and the WSL2
+# distro name the runners pass (FM_TEST_WSL_DISTRO overrides it for one call).
+TEST_MACHINE_ID=0123456789abcdef0123456789abcdef
+TEST_SYSTEM="$TEST_MACHINE_ID/Ubuntu"
 
 # stage_proc <case-dir> <boot-id> <pid-namespace>: the staged /proc the tmux
 # endpoint proof reads (FM_TMUX_PROC_ROOT_OVERRIDE). Re-staging the boot id is
@@ -262,14 +268,18 @@ stage_proc_incarnation() {  # <case-dir> <pid1-starttime> [user-ns]
 }
 
 # record_tmux_identity <case-dir> <id> <boot> [server-pid start pane-id [pidns
-# [pid1-start]]]: the endpoint identity fm-spawn records, as of the window's
-# creation.
+# [pid1-start [system]]]]: the endpoint identity fm-spawn records, as of the
+# window's creation. A pid 1 start comes with this case's system unless another
+# is named; `none` records none.
 record_tmux_identity() {
   local meta="$1/home/state/$2.meta"
   printf 'tmux_boot=%s\n' "$3" >> "$meta"
   [ -n "${4:-}" ] || return 0
   printf 'tmux_pidns=%s\n' "${7:-pid:[4026531836]}" >> "$meta"
-  [ -z "${8:-}" ] || printf 'tmux_pidns_init_start=%s\n' "$8" >> "$meta"
+  if [ -n "${8:-}" ]; then
+    printf 'tmux_pidns_init_start=%s\n' "$8" >> "$meta"
+    [ "${9:-}" = none ] || printf 'tmux_system=%s\n' "${9:-$TEST_SYSTEM}" >> "$meta"
+  fi
   printf 'tmux_server_pid=%s\ntmux_server_start=starttime=%s\ntmux_pane_id=%s\n' "$4" "$5" "$6" >> "$meta"
 }
 
@@ -317,7 +327,8 @@ run_control() {  # <case-dir> <args...>
     PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
     HOME="$dir/user-home" CLAUDE_CONFIG_DIR='' \
     FM_SPAWN_NO_GUARD=1 GROK_HOME="$dir/grokhome" \
-    FM_TMUX_PROC_ROOT_OVERRIDE="$dir/proc" \
+    FM_TMUX_PROC_ROOT_OVERRIDE="$dir/proc" FM_TMUX_MACHINE_ID_OVERRIDE="$dir/machine-id" \
+    WSL_DISTRO_NAME="${FM_TEST_WSL_DISTRO:-Ubuntu}" \
     FM_CONTROL_POLL=0.01 FM_CONTROL_EXIT_WAIT=0.05 FM_CONTROL_LAUNCH_WAIT=0.05 \
     FM_REAL_GIT="${FM_REAL_GIT:-}" FM_FAKE_GIT_FAILURE="${FM_FAKE_GIT_FAILURE:-}" \
     FM_REAL_MV="${FM_REAL_MV:-}" FM_FAKE_COMPLETE_JOURNAL_MV_FAIL="${FM_FAKE_COMPLETE_JOURNAL_MV_FAIL:-}" \
@@ -340,7 +351,8 @@ run_spawn() {  # <case-dir> <args...>
     PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
     HOME="$dir/user-home" CLAUDE_CONFIG_DIR='' \
     FM_SPAWN_NO_GUARD=1 GROK_HOME="$dir/grokhome" \
-    FM_TMUX_PROC_ROOT_OVERRIDE="$dir/proc" \
+    FM_TMUX_PROC_ROOT_OVERRIDE="$dir/proc" FM_TMUX_MACHINE_ID_OVERRIDE="$dir/machine-id" \
+    WSL_DISTRO_NAME="${FM_TEST_WSL_DISTRO:-Ubuntu}" \
     "$SPAWN" "$@" 2>&1
 }
 
@@ -2224,9 +2236,9 @@ test_tmux_refuses_a_server_pid_read_from_another_namespace() {
 
 # The reported WSL2 case: the VM kernel, and so the boot id, survive a distro
 # restart, but the distro comes back in a new pid namespace with a new pid 1.
-stage_distro_restart() {  # <case-dir> <id> <recorded-pid1-start> [current-pid1-start] [user-ns]
+stage_distro_restart() {  # <case-dir> <id> <recorded-pid1-start> [current-pid1-start] [user-ns] [recorded-system]
   local dir=$1 id=$2
-  record_tmux_identity "$dir" "$id" boot-now 1347 1633 %96 'pid:[4026532212]' "$3"
+  record_tmux_identity "$dir" "$id" boot-now 1347 1633 %96 'pid:[4026532212]' "$3" "${6:-}"
   stage_proc "$dir" boot-now 'pid:[4026532218]'
   stage_proc_incarnation "$dir" "${4:-20107461}" "${5:-}"
   # The recorded pid names an unrelated process in the new namespace, and only
@@ -2250,6 +2262,8 @@ test_tmux_reclaims_a_window_after_a_distro_restart() {
     || fail "the rebound record should carry this namespace's pid 1 start: $(meta_field "$dir" rl75 tmux_pidns_init_start)"
   [ "$(grep -c '^tmux_pidns_init_start=' "$dir/home/state/rl75.meta")" = 1 ] \
     || fail "the rebound record should carry exactly one incarnation identity"
+  [ "$(grep '^tmux_system=' "$dir/home/state/rl75.meta")" = "tmux_system=$TEST_SYSTEM" ] \
+    || fail "the rebound record should carry exactly this system's identity: $(grep '^tmux_system=' "$dir/home/state/rl75.meta")"
   assert_absent "$dir/home/state/rl75.status" "a proven reclaim needs no captain's word in the status log"
   pass "tmux: after a distro restart on an unchanged boot, relaunch reclaims a task recorded with its incarnation"
 }
@@ -2274,6 +2288,39 @@ test_tmux_refuses_a_foreign_namespace_not_shown_restarted() {
   pass "tmux: a foreign pid namespace is never read as a restart from a sandbox or an older system"
 }
 
+# A second WSL2 distro shares the kernel and the boot, and its pid 1 may well
+# have started after the recorded server; it is still another system, whose
+# window may be running.
+test_tmux_refuses_a_later_pid_namespace_of_another_system() {
+  local dir out rc
+  dir=$(new_case tmux-other-distro rl82)
+  add_ship_task "$dir" rl82 claude
+  stage_distro_restart "$dir" rl82 4
+  out=$(FM_TEST_WSL_DISTRO=Debian run_spawn "$dir" rl82 --relaunch --harness claude); rc=$?
+  expect_code 1 "$rc" "a later pid namespace in another distro must refuse"$'\n'"$out"
+  assert_contains "$out" "different namespace" "the refusal should name the namespace mismatch"
+  out=$(FM_TEST_WSL_DISTRO=Debian run_control "$dir" rl82 exit); rc=$?
+  expect_code 1 "$rc" "exit must refuse a later pid namespace in another distro"$'\n'"$out"
+  assert_absent "$dir/fake/created-windows" "another distro's window must not be re-created"
+
+  dir=$(new_case tmux-other-machine-id rl82)
+  add_ship_task "$dir" rl82 claude
+  stage_distro_restart "$dir" rl82 4 '' '' "fedcba9876543210fedcba9876543210/Ubuntu"
+  assert_tmux_missing_refuses "$dir" rl82 "recorded on another machine id"
+
+  dir=$(new_case tmux-no-system rl82)
+  add_ship_task "$dir" rl82 claude
+  stage_distro_restart "$dir" rl82 4 '' '' none
+  assert_tmux_missing_refuses "$dir" rl82 "incarnation without a system identity"
+
+  dir=$(new_case tmux-unreadable-system rl82)
+  add_ship_task "$dir" rl82 claude
+  stage_distro_restart "$dir" rl82 4
+  rm -f "$dir/machine-id"
+  assert_tmux_missing_refuses "$dir" rl82 "this system's machine id unreadable"
+  pass "tmux: a later pid namespace is a restart only of the same system, never of another distro"
+}
+
 test_tmux_relaunch_records_no_incarnation_from_a_sandbox() {
   local dir out rc=0
   dir=$(new_case tmux-sandbox-identity rl77)
@@ -2283,7 +2330,7 @@ test_tmux_relaunch_records_no_incarnation_from_a_sandbox() {
   out=$(run_control "$dir" rl77 relaunch --note "same window, from a sandbox") || rc=$?
   expect_code 0 "$rc" "an ordinary relaunch should succeed"$'\n'"$out"
   [ "$(meta_field "$dir" rl77 tmux_server_pid)" = 4242 ] || fail "the record should carry the live server pid"
-  [ -z "$(meta_field "$dir" rl77 tmux_pidns_init_start)" ] \
+  [ -z "$(meta_field "$dir" rl77 tmux_pidns_init_start)$(meta_field "$dir" rl77 tmux_system)" ] \
     || fail "a sandboxed seat must not record an incarnation it cannot vouch for"
   pass "tmux: a pid 1 start read from inside a sandbox is never recorded as the incarnation"
 }
@@ -3101,6 +3148,7 @@ test_tmux_refuses_when_its_running_server_is_not_the_addressed_one
 test_tmux_refuses_a_server_pid_read_from_another_namespace
 test_tmux_reclaims_a_window_after_a_distro_restart
 test_tmux_refuses_a_foreign_namespace_not_shown_restarted
+test_tmux_refuses_a_later_pid_namespace_of_another_system
 test_tmux_relaunch_records_no_incarnation_from_a_sandbox
 test_tmux_captain_confirms_a_legacy_namespace_record_gone
 test_tmux_captain_word_settles_nothing_else

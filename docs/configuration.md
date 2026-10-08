@@ -152,7 +152,7 @@ A cmux spawn additionally version-gates against the installed `cmux` binary's ve
 A backend spawn refusal from a missing dependency, version gate, or unauthenticated socket is terminal for that selected backend; firstmate surfaces it as a blocker instead of silently retrying another backend.
 Task meta records `backend=` only for a non-default backend; an absent `backend=` means `tmux`, preserving existing default-path meta files.
 Every new task records `endpoint_task_id=` as the cleanup binding between the metadata filename and its opaque runtime endpoint.
-A tmux task additionally records the endpoint identity that lets a later missing window be proven gone - `tmux_boot=`, and when its server could be read `tmux_pidns=` (with `tmux_pidns_init_start=` where it can be read), `tmux_server_pid=`, `tmux_server_start=`, and `tmux_pane_id=` - whose meaning and proof [`agent-control.md`](agent-control.md#reclaiming-a-task-whose-endpoint-is-gone) owns.
+A tmux task additionally records the endpoint identity that lets a later missing window be proven gone - `tmux_boot=`, and when its server could be read `tmux_pidns=` (with `tmux_pidns_init_start=` and `tmux_system=` where they can be read), `tmux_server_pid=`, `tmux_server_start=`, and `tmux_pane_id=` - whose meaning and proof [`agent-control.md`](agent-control.md#reclaiming-a-task-whose-endpoint-is-gone) owns.
 A herdr task additionally records `herdr_session=`, `herdr_workspace_id=`, `herdr_tab_id=`, and `herdr_pane_id=`.
 A zellij task additionally records `zellij_session=`, `zellij_tab_id=`, and `zellij_pane_id=`.
 An Orca task additionally records `orca_worktree_id=` and `terminal=`, with `window=fm-<id>` kept as the shared firstmate alias.

@@ -307,9 +307,9 @@ fm_control_backend_state_verified() {  # <backend>
 #     a different boot, an exited server, or a pane id missing from the
 #     recorded server's own pane inventory is `gone`, and so is a Linux system
 #     restart on an unchanged boot (a WSL2 distro restart) shown by a different
-#     pid namespace whose pid 1 started after the recorded server; anything
-#     less, including every record written before that identity existed, stays
-#     `unproven`. The one exception is a full server identity recorded in a
+#     pid namespace of the same system whose pid 1 started after the recorded
+#     server; anything less, including every record written before that
+#     identity existed, stays `unproven`. The one exception is a full server identity recorded in a
 #     different pid namespace on this same boot that could not be shown
 #     restarted (the WSL2 distro restart of a record that predates
 #     tmux_pidns_init_start=): with `captain-confirmed` it is `confirmed`.

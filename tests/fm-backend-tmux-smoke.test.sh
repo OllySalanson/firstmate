@@ -433,20 +433,33 @@ if [ "$(readlink /proc/self/ns/user 2>/dev/null)" = 'user:[4026531837]' ] \
   INIT_START=$(awk '{ sub(/.*\) /, ""); print $20 }' /proc/1/stat)
   [ "$(fm_backend_meta_exact_value "$ABS_META" tmux_pidns_init_start)" = "$INIT_START" ] \
     || fail "the recorded identity should carry this namespace's pid 1 start ($INIT_START): $(cat "$ABS_META")"
-  pass "real tmux: a window recorded in the initial namespaces names its Linux system incarnation"
+  SYSTEM_ID="$(cat /etc/machine-id 2>/dev/null)${WSL_DISTRO_NAME:+/$WSL_DISTRO_NAME}"
+  [ "$(fm_backend_meta_exact_value "$ABS_META" tmux_system)" = "$SYSTEM_ID" ] \
+    || fail "the recorded identity should name this system ($SYSTEM_ID): $(cat "$ABS_META")"
+  pass "real tmux: a window recorded in the initial namespaces names its Linux system and incarnation"
 
   # A WSL2 distro restart, judged by the real kernel reads: a record from
   # another pid namespace whose own pid 1 and tmux server both started before
   # this namespace's pid 1 did.
   RESTART_META="$SHIM_DIR/restart.meta"
-  printf 'tmux_boot=%s\ntmux_pidns=pid:[1]\ntmux_pidns_init_start=0\ntmux_server_pid=%s\ntmux_server_start=starttime=0\ntmux_pane_id=%%1\n' \
-    "$(cat /proc/sys/kernel/random/boot_id)" "$SERVER_PID" > "$RESTART_META"
+  printf 'tmux_boot=%s\ntmux_pidns=pid:[1]\ntmux_pidns_init_start=0\ntmux_system=%s\ntmux_server_pid=%s\ntmux_server_start=starttime=0\ntmux_pane_id=%%1\n' \
+    "$(cat /proc/sys/kernel/random/boot_id)" "$SYSTEM_ID" "$SERVER_PID" > "$RESTART_META"
   proof=$(absence_proof "$RESTART_META")
   case "$proof" in
     "gone "*"has restarted on this same boot (a WSL2 distro restart)"*"$(readlink /proc/self/ns/pid)"*"tick $INIT_START"*) ;;
     *) fail "a window from an earlier Linux system incarnation on this boot should be proven gone: $proof" ;;
   esac
   pass "real tmux: a window from an earlier Linux system incarnation on an unchanged boot is proven gone"
+
+  # The same record from another system sharing this kernel, such as a second
+  # WSL2 distro, proves nothing.
+  sed 's|^tmux_system=.*|tmux_system=ffffffffffffffffffffffffffffffff/OtherDistro|' "$RESTART_META" > "$RESTART_META.other"
+  proof=$(absence_proof "$RESTART_META.other")
+  case "$proof" in
+    "foreign "*"different namespace"*) ;;
+    *) fail "a later pid namespace of another system must not be proven gone: $proof" ;;
+  esac
+  pass "real tmux: a later pid namespace of another system on this kernel is never proven gone"
 else
   echo "skip - not in the initial user and time namespaces; the restart incarnation case is pinned by tests/fm-control-relaunch.test.sh"
 fi
