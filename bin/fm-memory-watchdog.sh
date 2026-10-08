@@ -556,7 +556,7 @@ cmd_history() {
     return 0
   fi
   awk -F '\t' -v from="$from" -v to="$to" -v label="$label" -v every="$SAMPLE_EVERY" \
-    -v off="$(((${offset:1:2} * 3600 + ${offset:3:2} * 60) * (${offset:0:1}1)))" '
+    -v off="$(((10#${offset:1:2} * 3600 + 10#${offset:3:2} * 60) * (${offset:0:1}1)))" '
     function hm(t,   l) { l = (t + off) % 86400; if (l < 0) l += 86400; return sprintf("%02d:%02d", int(l / 3600), int((l % 3600) / 60)) }
     function num(v) { return v != "" && v != "-" }
     function range(a, b) { return hm(a) "-" hm(b) }

@@ -836,6 +836,19 @@ test_history_window_may_run_past_now() {
   pass "a history window that runs past now, such as during a slowdown, ends at now"
 }
 
+test_history_reads_zones_whose_offset_has_a_leading_zero() {
+  local out base=1790960400
+  new_case histzone
+  printf '%s\tmem=77\tpsi=5.0\n' $((base + 60)) >"$H/state/watchdog-history"
+  # Offsets such as +0900 and -0800 must not be read as invalid octal numbers.
+  out=$(TZ=FMT-9 wd history --since "$base" --until $((base + 600))) || fail "a +0900 zone was refused: $out"
+  assert_contains "$out" "(1 samples" "a +0900 zone lost its sample"
+  assert_contains "$out" "  02:01  memory 77%" "a +0900 zone placed the sample at the wrong time"
+  out=$(TZ=FMT+8 wd history --since "$base" --until $((base + 600))) || fail "a -0800 zone was refused: $out"
+  assert_contains "$out" "  09:01  memory 77%" "a -0800 zone placed the sample at the wrong time"
+  pass "history reads zone offsets with a leading zero, such as +0900 and -0800"
+}
+
 test_history_window_may_cross_midnight() {
   local out now secs zone
   new_case histmidnight
@@ -917,6 +930,7 @@ test_overload_from_elsewhere_reports_once
 test_poll_continues_commands_a_dead_loop_left_paused
 test_history_explains_a_window
 test_history_window_may_run_past_now
+test_history_reads_zones_whose_offset_has_a_leading_zero
 test_history_window_may_cross_midnight
 test_history_rotates_at_its_size_limit
 test_processor_and_connection_config
