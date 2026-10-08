@@ -1,0 +1,18 @@
+$ cat config/tmux-colours
+# 8 Oct mapping
+prefix clerk- colour130
+prefix rr-clerk- colour130
+project ready-reckoner colour28
+project customer-care colour33
+project escape-from-pallet-town-web colour160
+project nut-and-bolt-store colour208
+project firstmate colour245
+
+clerk-12       task=clerk-12    project=ready-reckoner               window-status-style=fg=colour130,bold current=bg=colour130,fg=colour231,bold
+rr-clerk-3     task=rr-clerk-3  project=ready-reckoner               window-status-style=fg=colour130,bold current=bg=colour130,fg=colour231,bold
+rr-quote-7     task=rr-quote-7  project=ready-reckoner               window-status-style=fg=colour28,bold current=bg=colour28,fg=colour231,bold
+cc-4           task=cc-4        project=customer-care                window-status-style=fg=colour33,bold current=bg=colour33,fg=colour231,bold
+ept-9          task=ept-9       project=escape-from-pallet-town-web  window-status-style=fg=colour160,bold current=bg=colour160,fg=colour231,bold
+nb-2           task=nb-2        project=nut-and-bolt-store           window-status-style=fg=colour208,bold current=bg=colour208,fg=colour231,bold
+fm-1           task=fm-1        project=firstmate                    window-status-style=fg=colour245,bold current=bg=colour245,fg=colour231,bold
+other-5        task=other-5     project=some-other-repo              window-status-style=                 current=

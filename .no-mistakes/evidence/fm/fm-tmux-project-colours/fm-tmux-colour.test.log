@@ -1,0 +1,12 @@
+ok - an absent config/tmux-colours leaves the window uncoloured and silent
+ok - a matching prefix rule beats an earlier project rule
+ok - a project rule colours a task no prefix rule matches
+ok - a task no rule matches stays uncoloured
+ok - a #rrggbb colour is accepted
+ok - a matching rule with a bad colour reports once and stays uncoloured
+ok - malformed lines are reported once each and skipped
+ok - a colour carrying extra style syntax is refused
+ok - fm-spawn colours a fresh tmux window from config/tmux-colours
+ok - fm-spawn without config/tmux-colours behaves as before
+ok - fm-spawn reports a bad colour once and launches uncoloured
+rc=0
