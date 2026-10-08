@@ -187,6 +187,11 @@ case "${1:-}" in
     printf '%s\n' "$name" >> "$D/created-windows"
     printf '@9\n'
     exit 0 ;;
+  set-window-option)
+    # Window colouring (bin/fm-tmux-colour-lib.sh) is observable here.
+    shift
+    printf '%s\n' "$*" >> "$D/window-options"
+    exit 0 ;;
   kill-window)
     shift
     while [ $# -gt 0 ]; do
@@ -582,6 +587,21 @@ test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint() {
   assert_grep "/exit" "$dir/fake/literal" "the previous agent should have been exited"
   assert_grep "encode launch-brief" "$dir/fake/literal" "the replacement should have been launched"
   pass "fm-control relaunch: a same-harness relaunch replaces the agent in the same endpoint and worktree"
+}
+
+test_relaunch_recolours_the_adopted_window() {
+  local dir out rc
+  dir=$(new_case colour-adopt rl90)
+  add_ship_task "$dir" rl90 claude
+  mkdir -p "$dir/home/config"
+  printf '%s\n' 'prefix rl9 colour130' 'project proj colour28' > "$dir/home/config/tmux-colours"
+  out=$(run_control "$dir" rl90 relaunch --note "pick the work back up"); rc=$?
+  expect_code 0 "$rc" "a relaunch with a colour rule should succeed"$'\n'"$out"
+  assert_grep "window-status-style fg=colour130,bold" "$dir/fake/window-options" \
+    "a relaunch should colour the adopted window by its prefix rule"
+  assert_grep "window-status-current-style bg=colour130,fg=colour231,bold" "$dir/fake/window-options" \
+    "a relaunch should colour the adopted window's selected tab too"
+  pass "fm-control relaunch: an adopted tmux window is coloured again from config/tmux-colours"
 }
 
 test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text() {
@@ -2161,6 +2181,22 @@ test_tmux_reclaims_a_window_whose_server_exited() {
   pass "tmux: a window whose server process exited is proven gone and reclaimed"
 }
 
+test_tmux_reclaim_colours_the_recreated_window() {
+  local dir
+  dir=$(new_case tmux-colour rl91)
+  add_ship_task "$dir" rl91 claude
+  mkdir -p "$dir/home/config"
+  printf '%s\n' 'project proj colour28' > "$dir/home/config/tmux-colours"
+  record_tmux_identity "$dir" rl91 boot-now 4242 500 %3
+  stage_proc_pid "$dir" 4242
+  : > "$dir/fake/server-dead"
+  printf '' > "$dir/fake/addressed-pid"
+  assert_tmux_reclaimed "$dir" rl91 "the tmux server that held it (pid 4242) has exited" "server exited"
+  assert_grep "window-status-style fg=colour28,bold" "$dir/fake/window-options" \
+    "a reclaim should colour the re-created window by its project rule"
+  pass "tmux: a reclaimed window is coloured from config/tmux-colours"
+}
+
 test_tmux_reclaims_a_window_whose_server_pid_was_reused() {
   local dir
   dir=$(new_case tmux-pidreuse rl66)
@@ -3081,6 +3117,7 @@ test_relaunch_deferred_by_the_memory_gate_changes_nothing
 test_gated_relaunch_reserves_its_worker_once
 test_direct_spawn_relaunch_is_memory_gated
 test_secondmate_relaunch_refuses_the_memory_override
+test_relaunch_recolours_the_adopted_window
 test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven
 test_relaunch_from_linked_home_preserves_recorded_worktree
@@ -3141,6 +3178,7 @@ test_tmux_refuses_a_session_that_cannot_be_found
 test_tmux_refuses_when_the_server_is_gone
 test_tmux_reclaims_every_window_after_a_machine_restart
 test_tmux_reclaims_a_window_whose_server_exited
+test_tmux_reclaim_colours_the_recreated_window
 test_tmux_reclaims_a_window_whose_server_pid_was_reused
 test_tmux_reclaims_a_window_closed_on_its_running_server
 test_tmux_refuses_a_window_that_only_moved_on_its_server

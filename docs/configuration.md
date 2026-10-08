@@ -211,6 +211,24 @@ A Secondmate on a remote route is covered the same way: the primary resolves and
 The presence flag is session-scoped enablement, so it transfers at launch and is left unchanged by live convergence into a running home.
 See [`trace-context.md`](trace-context.md) for carrier semantics, supported routes, the manual fleet-restart requirement, the session boundary, and safety limits; `bin/fm-trace-context-lib.sh`'s header owns the exact mechanics, and [`verification/trace-context.md`](verification/trace-context.md) records repeatable evidence.
 
+## Worker window colours (config/tmux-colours)
+
+The optional local, gitignored `config/tmux-colours` file colours each tmux worker window's tab by task-id prefix or project, so work for different projects is easy to tell apart at a glance.
+Each line is `prefix <task-id-prefix> <colour>` or `project <project-name> <colour>`, and every prefix rule is checked before any project rule, so a `clerk-` prefix can win over the repository its work lives in.
+A project name is the basename of the spawn's project directory, or of the home directory for a secondmate.
+For example:
+
+```
+prefix clerk- colour130
+project ready-reckoner colour28
+project firstmate colour245
+```
+
+The colour is applied when `bin/fm-spawn.sh` creates a tmux window for a crewmate, scout, or secondmate, and again on every relaunch; other backends ignore the file, and an absent file changes nothing.
+A bad entry never fails a spawn: it is reported once as a warning and the window launches uncoloured.
+The file is a home-local preference and is not inherited by secondmate homes.
+[`bin/fm-tmux-colour-lib.sh`](../bin/fm-tmux-colour-lib.sh)'s header owns the exact rule matching, accepted colour forms, and the window styles it sets.
+
 ## Fleet activity ledger (config/fleet-ledger)
 
 See [`fleet-ledger.md`](fleet-ledger.md) for the opt-in setup, record contract, and limits.

@@ -98,6 +98,8 @@ fm_test_fake_gh_axi() {
 # is set, each send-keys TEXT-LINE payload (the pre-launch pane exports, which
 # carry no -l) is appended there instead, one per line in send order. Optional
 # FM_FAKE_DUPLICATE_WINDOW is printed from list-windows.
+# When FM_FAKE_WINDOW_OPTION_LOG is set, each set-window-option call's
+# arguments are appended there, one call per line.
 #
 # The pane path defaults to empty when FM_FAKE_PANE_PATH is unset. Window
 # cleanup and option operations are no-ops. Launch logging is env-gated, so
@@ -119,7 +121,14 @@ case "${1:-}" in
     fi
     exit 0
     ;;
-  has-session|new-session|new-window|kill-window|set-window-option) exit 0 ;;
+  has-session|new-session|new-window|kill-window) exit 0 ;;
+  set-window-option)
+    if [ -n "${FM_FAKE_WINDOW_OPTION_LOG:-}" ]; then
+      shift
+      printf '%s\n' "$*" >> "$FM_FAKE_WINDOW_OPTION_LOG"
+    fi
+    exit 0
+    ;;
   send-keys)
     if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
       prev=
