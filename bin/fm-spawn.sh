@@ -57,7 +57,11 @@
 #   merely unreachable from here. HERDR must still read the recorded pane as
 #   gone once that session's server is running again; TMUX proves it from the
 #   endpoint identity recorded at spawn (fm_backend_tmux_endpoint_absence_proof),
-#   and a tmux record without that identity refuses. An endpoint that turns out
+#   and a tmux record without that identity refuses. The one unproven tmux
+#   state the captain may settle by their explicit word (a different pid
+#   namespace on the same boot) is honoured only when bin/fm-control.sh hands
+#   its --captain-confirms-endpoint-gone over as FM_CAPTAIN_CONFIRMED_GONE=<id>
+#   for this exact task. An endpoint that turns out
 #   to have survived refuses too. The worktree is reused untouched either way; a
 #   rebind is a recovery, never a teardown. Only a crewmate or scout rebinds: a
 #   secondmate whose endpoint is gone is respawned by its own owner
@@ -774,6 +778,8 @@ esac
 # refusal rather than a silently-ignored flag.
 MEMORY_PREADMITTED=${FM_MEMORY_ADMITTED:-}
 unset FM_MEMORY_ADMITTED
+CAPTAIN_CONFIRMED_GONE=${FM_CAPTAIN_CONFIRMED_GONE:-}
+unset FM_CAPTAIN_CONFIRMED_GONE
 MEMORY_OVERRIDE_SECONDMATE_ERROR="error: --memory-override applies only to ship and scout spawns; secondmate spawns are not memory-gated"
 if [ "$MEMORY_OVERRIDE" -eq 1 ] && [ "$KIND" = secondmate ]; then
   echo "$MEMORY_OVERRIDE_SECONDMATE_ERROR" >&2
@@ -1687,7 +1693,8 @@ if [ "$RELAUNCH" -eq 1 ]; then
   #           pane itself did not survive.
   #   tmux  - no read here can tell "gone" from "on a server I cannot see", so
   #           absence is proven from the endpoint identity the record carries
-  #           instead: a machine restart, an exited tmux server, or the agent's
+  #           instead: a machine restart, a Linux system restart on the same
+  #           boot (a WSL2 distro restart), an exited tmux server, or the agent's
   #           pane id closed on the recorded server. A record without that identity
   #           (written before it existed) still refuses, with the reason stated
   #           rather than guessed past.
@@ -1698,9 +1705,10 @@ if [ "$RELAUNCH" -eq 1 ]; then
   # `relaunch` cannot reach two different answers about one endpoint.
   RELAUNCH_STATE=$(fm_backend_agent_state "$BACKEND" "$RELAUNCH_TARGET")
   if [ "$RELAUNCH_STATE" = missing ]; then
-    RELAUNCH_ABSENCE=$(fm_control_endpoint_absence_verdict "$BACKEND" "$RELAUNCH_TARGET" "$RELAUNCH_META")
+    RELAUNCH_ABSENCE=$(fm_control_endpoint_absence_verdict "$BACKEND" "$RELAUNCH_TARGET" "$RELAUNCH_META" \
+      "$([ -z "$ID" ] || [ "$CAPTAIN_CONFIRMED_GONE" != "$ID" ] || printf captain-confirmed)")
     case "${RELAUNCH_ABSENCE%%$'\t'*}" in
-      gone)
+      gone|confirmed)
         RELAUNCH_STATE=missing
         [ -z "${RELAUNCH_ABSENCE#*$'\t'}" ] ||
           echo "note: task $ID's recorded endpoint $RELAUNCH_TARGET is gone: ${RELAUNCH_ABSENCE#*$'\t'}; re-creating it in the recorded worktree" >&2
@@ -4632,7 +4640,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend tmux_boot tmux_pidns tmux_server_pid tmux_server_start tmux_pane_id herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend tmux_boot tmux_pidns tmux_pidns_init_start tmux_server_pid tmux_server_start tmux_pane_id herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)

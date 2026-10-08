@@ -266,7 +266,9 @@ fm_control_backend_state_verified() {  # <backend>
 # fm_control_endpoint_absence_verdict: the ONE owner of the per-backend proof
 # that an endpoint reading `missing` is actually GONE rather than merely
 # unreachable from this seat. Call it only for a `missing` raw state, with the
-# task's record as <meta>.
+# task's record as <meta>. Pass `captain-confirmed` as the fourth argument only
+# when the captain has explicitly said the endpoint is gone
+# (`--captain-confirms-endpoint-gone`).
 #
 # Prints "<verdict>\t<reason>" - always exactly one TAB, so a caller splits
 # unambiguously with ${raw%%$'\t'*} and ${raw#*$'\t'}. On `unproven` the reason
@@ -279,6 +281,9 @@ fm_control_backend_state_verified() {  # <backend>
 #   gone     - absence is PROVEN. There is no endpoint and therefore no agent.
 #   dead     - the endpoint is there after all and holds no agent.
 #   alive    - the endpoint is there and an agent is running in it.
+#   confirmed - absence rests on the captain's explicit word rather than a
+#              proof; callers act on it as `gone` and record that it was the
+#              captain's word in the task's status log.
 #   unproven - neither could be established; the caller must refuse.
 #
 # fm_backend_agent_state's `missing` conflates "the endpoint was DESTROYED"
@@ -299,15 +304,20 @@ fm_control_backend_state_verified() {  # <backend>
 #     instead from the endpoint identity the record carries - the kernel boot,
 #     the tmux server process, and the agent's pane id it was created with -
 #     which bin/backends/tmux.sh's fm_backend_tmux_endpoint_absence_proof owns:
-#     a different boot, an exited server, an ended pid namespace (a WSL2
-#     distro restart on an unchanged boot), or a pane id missing from the
-#     recorded server's own pane inventory is `gone`; anything less, including every
-#     record written before that identity existed, stays `unproven`.
+#     a different boot, an exited server, or a pane id missing from the
+#     recorded server's own pane inventory is `gone`, and so is a Linux system
+#     restart on an unchanged boot (a WSL2 distro restart) shown by a different
+#     pid namespace whose pid 1 started after the recorded server; anything
+#     less, including every record written before that identity existed, stays
+#     `unproven`. The one exception is a full server identity recorded in a
+#     different pid namespace on this same boot that could not be shown
+#     restarted (the WSL2 distro restart of a record that predates
+#     tmux_pidns_init_start=): with `captain-confirmed` it is `confirmed`.
 #
 # Both control-plane callers share this one implementation so the proof cannot
 # drift into two answers for the same endpoint.
-fm_control_endpoint_absence_verdict() {  # <backend> <target> <meta>
-  local backend=${1-} target=${2-} meta=${3-} proof
+fm_control_endpoint_absence_verdict() {  # <backend> <target> <meta> [captain-confirmed]
+  local backend=${1-} target=${2-} meta=${3-} confirmed=${4-} proof
   fm_backend_source "$backend" \
     || { printf 'unproven\tbackend %s could not be loaded to prove anything about that endpoint' "'$backend'"; return 0; }
   case "$backend" in
@@ -315,6 +325,13 @@ fm_control_endpoint_absence_verdict() {  # <backend> <target> <meta>
       proof=$(fm_backend_tmux_endpoint_absence_proof "$meta") || proof=
       case "$proof" in
         gone$'\t'*|unproven$'\t'*) printf '%s' "$proof" ;;
+        foreign$'\t'*)
+          if [ "$confirmed" = captain-confirmed ]; then
+            printf 'confirmed\tthe captain confirmed it is gone: %s' "${proof#*$'\t'}"
+          else
+            printf 'unproven\t%s; if the captain has explicitly said this Linux system restarted since (a WSL2 distro restart) and the window is gone, pass --captain-confirms-endpoint-gone on their word' "${proof#*$'\t'}"
+          fi
+          ;;
         *) printf 'unproven\tthe tmux endpoint identity in the task record could not be evaluated' ;;
       esac
       ;;

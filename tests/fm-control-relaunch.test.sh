@@ -200,21 +200,6 @@ esac
 exit 0
 SH
   chmod +x "$fb/tmux"
-  # A fresh user namespace without the kernel: the Nth nested call is handed
-  # the Nth number listed in fresh-ns, through the staged /proc/self/ns/user
-  # the namespace-ended proof reads; with no number left, creation fails as an
-  # unavailable user namespace does. No case reaches the real kernel's numbers.
-  cat > "$fb/unshare" <<'SH'
-#!/usr/bin/env bash
-FM_FAKE_NS_DEPTH=$(( ${FM_FAKE_NS_DEPTH:-0} + 1 ))
-export FM_FAKE_NS_DEPTH
-n=$(sed -n "${FM_FAKE_NS_DEPTH}p" "$FM_FAKE_DIR/fresh-ns" 2>/dev/null)
-[ -n "$n" ] || { echo 'unshare: unshare failed: Operation not permitted' >&2; exit 1; }
-while [ $# -gt 0 ] && [ "${1#-}" != "$1" ]; do shift; done
-ln -sfn "user:[$n]" "$FM_TMUX_PROC_ROOT_OVERRIDE/self/ns/user"
-exec "$@"
-SH
-  chmod +x "$fb/unshare"
   cat > "$fb/sleep" <<'SH'
 #!/usr/bin/env bash
 [ -z "${FM_FAKE_LOCK_WAITING:-}" ] || : > "$FM_FAKE_LOCK_WAITING"
@@ -265,13 +250,26 @@ stage_proc_pid() {  # <case-dir> <pid> [starttime]
     "$2" "$2" "$2" "$3" > "$1/proc/$2/stat"
 }
 
-# record_tmux_identity <case-dir> <id> <boot> [server-pid start pane-id [pidns]]:
-# the endpoint identity fm-spawn records, as of the window's creation.
+# stage_proc_incarnation <case-dir> <pid1-starttime> [user-ns]: this pid
+# namespace's pid 1 and the user and time namespaces this process runs in,
+# which the Linux system restart proof reads. The user namespace defaults to
+# the kernel's initial one; any other models a sandbox.
+stage_proc_incarnation() {  # <case-dir> <pid1-starttime> [user-ns]
+  rm -f "$1/proc/self/ns/user" "$1/proc/self/ns/time"
+  ln -s "${3:-user:[4026531837]}" "$1/proc/self/ns/user"
+  ln -s 'time:[4026531834]' "$1/proc/self/ns/time"
+  stage_proc_pid "$1" 1 "$2"
+}
+
+# record_tmux_identity <case-dir> <id> <boot> [server-pid start pane-id [pidns
+# [pid1-start]]]: the endpoint identity fm-spawn records, as of the window's
+# creation.
 record_tmux_identity() {
   local meta="$1/home/state/$2.meta"
   printf 'tmux_boot=%s\n' "$3" >> "$meta"
   [ -n "${4:-}" ] || return 0
   printf 'tmux_pidns=%s\n' "${7:-pid:[4026531836]}" >> "$meta"
+  [ -z "${8:-}" ] || printf 'tmux_pidns_init_start=%s\n' "$8" >> "$meta"
   printf 'tmux_server_pid=%s\ntmux_server_start=starttime=%s\ntmux_pane_id=%s\n' "$4" "$5" "$6" >> "$meta"
 }
 
@@ -2034,7 +2032,7 @@ assert_tmux_missing_refuses() {  # <case-dir> <id> <what-was-staged>
   brief_before=$(cat "$dir/home/data/$id/brief.md")
   out=$(run_control "$dir" "$id" exit); rc=$?
   expect_code 1 "$rc" "exit must refuse a tmux endpoint whose absence cannot be proven ($what)"$'\n'"$out"
-  assert_not_contains "$out" "endpoint-gone" \
+  assert_not_contains "$out" "endpoint-gone $id" \
     "exit must not report a stop it cannot see ($what)"
   [ ! -s "$dir/fake/literal" ] || fail "a refused exit must send nothing into any pane ($what)"
 
@@ -2214,56 +2212,195 @@ test_tmux_refuses_a_server_pid_read_from_another_namespace() {
   dir=$(new_case tmux-pidns rl70)
   add_ship_task "$dir" rl70 claude
   record_tmux_identity "$dir" rl70 boot-now 4242 500 %3 'pid:[4026532000]'
-  # No fresh namespace can be had here, so the recorded one cannot be proven
-  # to have ended either.
   stage_proc_pid "$dir" 4242
   : > "$dir/fake/server-dead"
   assert_tmux_missing_refuses "$dir" rl70 "different pid namespace"
   out=$(run_spawn "$dir" rl70 --relaunch --harness claude); rc=$?
   expect_code 1 "$rc" "a foreign pid namespace must refuse"
   assert_contains "$out" "different namespace" "the refusal should name the namespace mismatch"
+  assert_contains "$out" "--captain-confirms-endpoint-gone" "the refusal should name the captain's override"
   pass "tmux: a server pid recorded in another pid namespace is never read as exited"
 }
 
-# A WSL2 distro restart: the VM kernel, and so the boot id, survive it, but the
-# distro comes back in a new pid namespace and the one the window was recorded
-# in is destroyed with every process numbered in it.
-test_tmux_reclaims_a_window_whose_pid_namespace_ended() {
-  local dir
-  dir=$(new_case tmux-pidns-ended rl75)
-  add_ship_task "$dir" rl75 claude
-  record_tmux_identity "$dir" rl75 boot-now 1347 1633 %96 'pid:[4026532212]'
+# The reported WSL2 case: the VM kernel, and so the boot id, survive a distro
+# restart, but the distro comes back in a new pid namespace with a new pid 1.
+stage_distro_restart() {  # <case-dir> <id> <recorded-pid1-start> [current-pid1-start] [user-ns]
+  local dir=$1 id=$2
+  record_tmux_identity "$dir" "$id" boot-now 1347 1633 %96 'pid:[4026532212]' "$3"
   stage_proc "$dir" boot-now 'pid:[4026532218]'
+  stage_proc_incarnation "$dir" "${4:-20107461}" "${5:-}"
   # The recorded pid names an unrelated process in the new namespace, and only
   # a fresh server exists there; neither may be read as the recorded one.
   stage_proc_pid "$dir" 1347 20107500
   : > "$dir/fake/server-dead"
   printf '' > "$dir/fake/addressed-pid"
-  # Two numbers still taken below it come first, then the kernel hands a fresh
-  # namespace the recorded one's number.
-  printf '4026532199\n4026532205\n4026532212\n' > "$dir/fake/fresh-ns"
-  printf 'dirty, never committed\n' > "$dir/wt/dirty.txt"
-  assert_tmux_reclaimed "$dir" rl75 "the pid namespace it was created in (pid:[4026532212]) has ended" "pid namespace ended"
-  assert_contains "$(cat "$dir/wt/dirty.txt")" "never committed" "a reclaim must keep uncommitted work"
-  pass "tmux: after a distro restart on an unchanged boot, relaunch reclaims a task whose pid namespace ended"
 }
 
-test_tmux_refuses_a_pid_namespace_whose_number_is_still_taken() {
+test_tmux_reclaims_a_window_after_a_distro_restart() {
+  local dir
+  dir=$(new_case tmux-distro-restart rl75)
+  add_ship_task "$dir" rl75 claude
+  stage_distro_restart "$dir" rl75 4
+  printf 'dirty, never committed\n' > "$dir/wt/dirty.txt"
+  assert_tmux_reclaimed "$dir" rl75 "has restarted on this same boot (a WSL2 distro restart)" "distro restart"
+  assert_contains "$(cat "$dir/wt/dirty.txt")" "never committed" "a reclaim must keep uncommitted work"
+  [ "$(meta_field "$dir" rl75 tmux_pidns)" = 'pid:[4026532218]' ] \
+    || fail "the rebound record should carry this pid namespace"
+  [ "$(meta_field "$dir" rl75 tmux_pidns_init_start)" = 20107461 ] \
+    || fail "the rebound record should carry this namespace's pid 1 start: $(meta_field "$dir" rl75 tmux_pidns_init_start)"
+  [ "$(grep -c '^tmux_pidns_init_start=' "$dir/home/state/rl75.meta")" = 1 ] \
+    || fail "the rebound record should carry exactly one incarnation identity"
+  assert_absent "$dir/home/state/rl75.status" "a proven reclaim needs no captain's word in the status log"
+  pass "tmux: after a distro restart on an unchanged boot, relaunch reclaims a task recorded with its incarnation"
+}
+
+test_tmux_refuses_a_foreign_namespace_not_shown_restarted() {
   local dir out rc
-  dir=$(new_case tmux-pidns-alive rl76)
+  # A pid 1 that started before the recorded server: another Linux system that
+  # was already running then, which may still hold the window.
+  dir=$(new_case tmux-pidns-older rl76)
   add_ship_task "$dir" rl76 claude
-  record_tmux_identity "$dir" rl76 boot-now 1347 1633 %96 'pid:[4026532212]'
-  stage_proc "$dir" boot-now 'pid:[4026532218]'
-  stage_proc_pid "$dir" 1347
-  : > "$dir/fake/server-dead"
-  # Every fresh namespace draws some other number: the recorded namespace may
-  # still be alive somewhere this process cannot see, its server with it.
-  printf '4026532205\n4026532219\n' > "$dir/fake/fresh-ns"
-  assert_tmux_missing_refuses "$dir" rl76 "pid namespace number still taken"
+  stage_distro_restart "$dir" rl76 4 1000
+  assert_tmux_missing_refuses "$dir" rl76 "pid 1 older than the recorded server"
   out=$(run_spawn "$dir" rl76 --relaunch --harness claude); rc=$?
-  expect_code 1 "$rc" "a pid namespace not proven ended must refuse"
-  assert_contains "$out" "could not be proven to have ended" "the refusal should say the namespace was not proven ended"
-  pass "tmux: a recorded pid namespace whose number no fresh namespace can take is never read as ended"
+  expect_code 1 "$rc" "a namespace not shown to be a later incarnation must refuse"
+  assert_contains "$out" "different namespace" "the refusal should name the namespace mismatch"
+
+  # A sandbox with its own user namespace inside a distro that still runs.
+  dir=$(new_case tmux-pidns-sandbox rl76)
+  add_ship_task "$dir" rl76 claude
+  stage_distro_restart "$dir" rl76 4 20107461 'user:[4026532300]'
+  assert_tmux_missing_refuses "$dir" rl76 "sandboxed reader"
+  pass "tmux: a foreign pid namespace is never read as a restart from a sandbox or an older system"
+}
+
+test_tmux_relaunch_records_no_incarnation_from_a_sandbox() {
+  local dir out rc=0
+  dir=$(new_case tmux-sandbox-identity rl77)
+  add_ship_task "$dir" rl77 claude
+  record_tmux_identity "$dir" rl77 boot-before 1111 7 %1
+  stage_proc_incarnation "$dir" 3 'user:[4026532300]'
+  out=$(run_control "$dir" rl77 relaunch --note "same window, from a sandbox") || rc=$?
+  expect_code 0 "$rc" "an ordinary relaunch should succeed"$'\n'"$out"
+  [ "$(meta_field "$dir" rl77 tmux_server_pid)" = 4242 ] || fail "the record should carry the live server pid"
+  [ -z "$(meta_field "$dir" rl77 tmux_pidns_init_start)" ] \
+    || fail "a sandboxed seat must not record an incarnation it cannot vouch for"
+  pass "tmux: a pid 1 start read from inside a sandbox is never recorded as the incarnation"
+}
+
+# The reported Clerk record: written before the incarnation was recorded, in a
+# pid namespace the distro restart ended, on the same boot.
+stage_legacy_distro_restart() {  # <case-dir> <id>
+  record_tmux_identity "$1" "$2" boot-now 1347 1633 %96 'pid:[4026532212]'
+  stage_proc "$1" boot-now 'pid:[4026532218]'
+  stage_proc_incarnation "$1" 20107461
+  stage_proc_pid "$1" 1347
+  : > "$1/fake/server-dead"
+  printf '' > "$1/fake/addressed-pid"
+}
+
+test_tmux_captain_confirms_a_legacy_namespace_record_gone() {
+  local dir out rc=0 status
+  dir=$(new_case tmux-captain-exit rl78)
+  add_ship_task "$dir" rl78 claude
+  stage_legacy_distro_restart "$dir" rl78
+  assert_tmux_missing_refuses "$dir" rl78 "legacy namespace record without the captain's word"
+  out=$(run_control "$dir" rl78 exit --captain-confirms-endpoint-gone) || rc=$?
+  expect_code 0 "$rc" "exit should accept the captain's confirmation"$'\n'"$out"
+  assert_contains "$out" "endpoint-gone rl78" "exit should report the endpoint gone"
+  [ ! -s "$dir/fake/literal" ] || fail "exit on a confirmed-gone endpoint must send nothing"
+  status=$(cat "$dir/home/state/rl78.status")
+  assert_contains "$status" "note [at=" "the confirmation should be a stamped note"
+  assert_contains "$status" "exit of rl78 treated endpoint fmses:fm-rl78 as gone on the captain's explicit word" \
+    "the status log should record whose word it was"
+
+  dir=$(new_case tmux-captain-relaunch rl79)
+  add_ship_task "$dir" rl79 claude
+  stage_legacy_distro_restart "$dir" rl79
+  printf 'dirty, never committed\n' > "$dir/wt/dirty.txt"
+  printf '4343' > "$dir/fake/server-pid"
+  stage_proc_pid "$dir" 4343 20107600
+  rc=0
+  out=$(run_control "$dir" rl79 relaunch --captain-confirms-endpoint-gone --note "the distro restarted; pick the work back up") || rc=$?
+  expect_code 0 "$rc" "relaunch should reclaim on the captain's confirmation"$'\n'"$out"
+  assert_contains "$out" "the captain confirmed it is gone" "the reclaim should say it rests on the captain's word"
+  assert_contains "$(cat "$dir/fake/created-windows")" "fm-rl79" "the reclaim should re-create the task's window"
+  [ "$(meta_field "$dir" rl79 window)" = "firstmate:fm-rl79" ] \
+    || fail "the record should rebind to the re-created window: $(meta_field "$dir" rl79 window)"
+  [ "$(meta_field "$dir" rl79 worktree)" = "$dir/wt" ] || fail "the reclaim must keep the recorded worktree"
+  [ "$(meta_field "$dir" rl79 tmux_pidns_init_start)" = 20107461 ] \
+    || fail "the rebound record should carry the incarnation that proves the next restart"
+  [ "$(journal_field "$dir" rl79 exit_result)" = endpoint-gone ] \
+    || fail "the transaction should record that the endpoint was gone"
+  assert_contains "$(cat "$dir/wt/dirty.txt")" "never committed" "a reclaim must keep uncommitted work"
+  [ "$(grep -c "captain's explicit word" "$dir/home/state/rl79.status")" = 1 ] \
+    || fail "the status log should record the captain's word once: $(cat "$dir/home/state/rl79.status")"
+  pass "tmux: on the captain's word, exit and relaunch reclaim a legacy record from an ended distro and log it"
+}
+
+# assert_captain_word_refused <case-dir> <id> <what> <reason>: the override is
+# no answer to any other unproven state.
+assert_captain_word_refused() {
+  local dir=$1 id=$2 what=$3 reason=$4 out rc
+  out=$(run_control "$dir" "$id" exit --captain-confirms-endpoint-gone); rc=$?
+  expect_code 1 "$rc" "exit must still refuse with the captain's word ($what)"$'\n'"$out"
+  assert_contains "$out" "$reason" "the refusal should name its real reason ($what)"
+  out=$(run_control "$dir" "$id" relaunch --captain-confirms-endpoint-gone --note "must never reach a live agent"); rc=$?
+  expect_code 1 "$rc" "relaunch must still refuse with the captain's word ($what)"$'\n'"$out"
+  out=$(FM_CAPTAIN_CONFIRMED_GONE="$id" run_spawn "$dir" "$id" --relaunch --harness claude); rc=$?
+  expect_code 1 "$rc" "the launch owner must still refuse with the captain's word ($what)"$'\n'"$out"
+  assert_absent "$dir/fake/created-windows" "a refused override must not create a window ($what)"
+  [ ! -s "$dir/fake/literal" ] || fail "a refused override must send nothing ($what)"
+  assert_absent "$dir/home/state/$id.status" "a refused override must log no confirmation ($what)"
+}
+
+test_tmux_captain_word_settles_nothing_else() {
+  local dir out rc
+  dir=$(new_case tmux-captain-legacy rl80)
+  add_ship_task "$dir" rl80 claude
+  : > "$dir/fake/server-dead"
+  assert_captain_word_refused "$dir" rl80 "no endpoint identity" "carries no endpoint identity"
+
+  dir=$(new_case tmux-captain-bootonly rl80)
+  add_ship_task "$dir" rl80 claude
+  record_tmux_identity "$dir" rl80 boot-now
+  : > "$dir/fake/server-dead"
+  assert_captain_word_refused "$dir" rl80 "no server identity" "has not restarted"
+
+  dir=$(new_case tmux-captain-otherserver rl80)
+  add_ship_task "$dir" rl80 claude
+  record_tmux_identity "$dir" rl80 boot-now 4242 500 %3
+  : > "$dir/fake/session-missing"
+  printf '5151' > "$dir/fake/addressed-pid"
+  printf '' > "$dir/fake/pane-ids"
+  assert_captain_word_refused "$dir" rl80 "recorded server alive on another socket" "a different server (pid 5151)"
+
+  dir=$(new_case tmux-captain-moved rl80)
+  add_ship_task "$dir" rl80 claude
+  record_tmux_identity "$dir" rl80 boot-now 4242 500 %3
+  strand_endpoint "$dir" rl80
+  printf '%%1\n%%3\n' > "$dir/fake/pane-ids"
+  assert_captain_word_refused "$dir" rl80 "pane id still on its server" "still exists on the tmux server"
+
+  dir=$(new_case tmux-captain-unreadable-ns rl80)
+  add_ship_task "$dir" rl80 claude
+  record_tmux_identity "$dir" rl80 boot-now 4242 500 %3 'pid:[4026532212]'
+  rm -f "$dir/proc/self/ns/pid"
+  : > "$dir/fake/server-dead"
+  assert_captain_word_refused "$dir" rl80 "unreadable pid namespace" "pid namespace could not be read"
+
+  # Handed over for another task, the launch owner does not honour it.
+  dir=$(new_case tmux-captain-other-task rl81)
+  add_ship_task "$dir" rl81 claude
+  stage_legacy_distro_restart "$dir" rl81
+  out=$(FM_CAPTAIN_CONFIRMED_GONE=rl80 run_spawn "$dir" rl81 --relaunch --harness claude); rc=$?
+  expect_code 1 "$rc" "a confirmation for another task must not apply"$'\n'"$out"
+  assert_absent "$dir/fake/created-windows" "a confirmation for another task must not create a window"
+
+  out=$(run_control "$dir" rl81 interrupt --captain-confirms-endpoint-gone); rc=$?
+  expect_code 1 "$rc" "interrupt has no endpoint-gone question to settle"
+  assert_contains "$out" "applies to 'exit' and 'relaunch' only" "the refusal should name the verbs it applies to"
+  pass "tmux: the captain's word settles only a different pid namespace on the same boot"
 }
 
 test_tmux_refuses_a_same_boot_record_without_server_identity() {
@@ -2962,8 +3099,11 @@ test_tmux_reclaims_a_window_closed_on_its_running_server
 test_tmux_refuses_a_window_that_only_moved_on_its_server
 test_tmux_refuses_when_its_running_server_is_not_the_addressed_one
 test_tmux_refuses_a_server_pid_read_from_another_namespace
-test_tmux_reclaims_a_window_whose_pid_namespace_ended
-test_tmux_refuses_a_pid_namespace_whose_number_is_still_taken
+test_tmux_reclaims_a_window_after_a_distro_restart
+test_tmux_refuses_a_foreign_namespace_not_shown_restarted
+test_tmux_relaunch_records_no_incarnation_from_a_sandbox
+test_tmux_captain_confirms_a_legacy_namespace_record_gone
+test_tmux_captain_word_settles_nothing_else
 test_tmux_refuses_a_same_boot_record_without_server_identity
 test_tmux_legacy_record_refusal_names_the_missing_identity
 test_tmux_relaunch_records_the_adopted_window_identity

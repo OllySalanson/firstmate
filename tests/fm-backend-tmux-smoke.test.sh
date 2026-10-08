@@ -426,17 +426,42 @@ case "$proof" in
 esac
 pass "real tmux: a window whose server process exited is proven gone"
 
-# A WSL2 distro restart, for real: the window is recorded from inside a fresh
-# pid namespace on this same boot and judged from outside it, as a distro that
-# came back in a new namespace judges its previous incarnation's windows.
+if [ "$(readlink /proc/self/ns/user 2>/dev/null)" = 'user:[4026531837]' ] \
+  && [ "$(readlink /proc/self/ns/time 2>/dev/null)" = 'time:[4026531834]' ]; then
+  # Recorded from the initial namespaces, the window carries the kernel start
+  # of this pid namespace's pid 1: the Linux system incarnation it lives in.
+  INIT_START=$(awk '{ sub(/.*\) /, ""); print $20 }' /proc/1/stat)
+  [ "$(fm_backend_meta_exact_value "$ABS_META" tmux_pidns_init_start)" = "$INIT_START" ] \
+    || fail "the recorded identity should carry this namespace's pid 1 start ($INIT_START): $(cat "$ABS_META")"
+  pass "real tmux: a window recorded in the initial namespaces names its Linux system incarnation"
+
+  # A WSL2 distro restart, judged by the real kernel reads: a record from
+  # another pid namespace whose own pid 1 and tmux server both started before
+  # this namespace's pid 1 did.
+  RESTART_META="$SHIM_DIR/restart.meta"
+  printf 'tmux_boot=%s\ntmux_pidns=pid:[1]\ntmux_pidns_init_start=0\ntmux_server_pid=%s\ntmux_server_start=starttime=0\ntmux_pane_id=%%1\n' \
+    "$(cat /proc/sys/kernel/random/boot_id)" "$SERVER_PID" > "$RESTART_META"
+  proof=$(absence_proof "$RESTART_META")
+  case "$proof" in
+    "gone "*"has restarted on this same boot (a WSL2 distro restart)"*"$(readlink /proc/self/ns/pid)"*"tick $INIT_START"*) ;;
+    *) fail "a window from an earlier Linux system incarnation on this boot should be proven gone: $proof" ;;
+  esac
+  pass "real tmux: a window from an earlier Linux system incarnation on an unchanged boot is proven gone"
+else
+  echo "skip - not in the initial user and time namespaces; the restart incarnation case is pinned by tests/fm-control-relaunch.test.sh"
+fi
+
+# A window recorded inside an unprivileged sandbox nested in this still-running
+# system, judged from outside it: it carries no incarnation, and its pid
+# namespace is not this one, so it is never proven gone.
 NS_DIR="$SHIM_DIR/pidns"
 if [ -e /proc/self/ns/pid ] && command -v unshare >/dev/null 2>&1 \
   && unshare --user --map-root-user --pid --fork --kill-child --mount-proc true 2>/dev/null; then
   mkdir -p "$NS_DIR"
   cat > "$NS_DIR/inner.sh" <<'SH'
 #!/usr/bin/env bash
-# Runs as pid 1 of the fresh namespace: its own tmux server on its own socket,
-# a recorded window, then a wait until told to end the namespace.
+# Runs as pid 1 of the sandbox: its own tmux server on its own socket, a
+# recorded window, then a wait until told to end.
 set -u
 root=$1 dir=$2 real_tmux=$3
 mkdir -p "$dir/bin"
@@ -459,40 +484,24 @@ SH
   i=0
   while [ ! -s "$NS_DIR/meta" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
   NS_META="$NS_DIR/meta"
-  [ -s "$NS_META" ] || fail "the window inside the fresh pid namespace was never recorded"
+  [ -s "$NS_META" ] || fail "the window inside the sandbox was never recorded"
   NS_PIDNS=$(fm_backend_meta_exact_value "$NS_META" tmux_pidns) \
-    || fail "the window recorded in the fresh pid namespace carries no namespace: $(cat "$NS_META")"
+    || fail "the window recorded in the sandbox carries no namespace: $(cat "$NS_META")"
   [ "$NS_PIDNS" != "$(readlink /proc/self/ns/pid)" ] \
     || fail "the window should have been recorded in a different pid namespace: $NS_PIDNS"
-  [ "$(fm_backend_meta_exact_value "$NS_META" tmux_boot)" = "$(cat /proc/sys/kernel/random/boot_id)" ] \
-    || fail "the window should have been recorded on this same boot: $(cat "$NS_META")"
+  ! fm_backend_meta_exact_value "$NS_META" tmux_pidns_init_start >/dev/null 2>&1 \
+    || fail "a sandbox with its own user namespace must not record an incarnation: $(cat "$NS_META")"
   proof=$(absence_proof "$NS_META")
   case "$proof" in
-    "unproven "*"different namespace"*"could not be proven to have ended"*) ;;
-    *) fail "a window whose pid namespace is still alive must not be proven gone: $proof" ;;
+    "foreign "*"different namespace ($(readlink /proc/self/ns/pid))"*"($NS_PIDNS)"*) ;;
+    *) fail "a window in a sandbox that is still running must not be proven gone: $proof" ;;
   esac
-  pass "real tmux: a window recorded in another pid namespace that is still alive is never proven gone"
-
+  pass "real tmux: a window recorded in a running sandbox's pid namespace is never proven gone"
   : > "$NS_DIR/stop"
-  wait "$NS_JOB" || fail "the fresh pid namespace did not end cleanly"
+  wait "$NS_JOB" || fail "the sandbox did not end cleanly"
   NS_JOB=
-  # The kernel frees an ended namespace's number asynchronously, so the proof
-  # is retried until it lands.
-  i=0
-  while :; do
-    proof=$(absence_proof "$NS_META")
-    case "$proof" in "gone "*) break ;; esac
-    [ "$i" -lt 100 ] || break
-    sleep 0.1
-    i=$((i + 1))
-  done
-  case "$proof" in
-    "gone "*"the pid namespace it was created in ($NS_PIDNS) has ended"*) ;;
-    *) fail "a window whose pid namespace ended on this same boot should be proven gone: $proof" ;;
-  esac
-  pass "real tmux: a window whose pid namespace ended on an unchanged boot is proven gone"
 else
-  echo "skip - no unprivileged pid namespace here; the namespace-ended case is pinned by tests/fm-control-relaunch.test.sh"
+  echo "skip - no unprivileged pid namespace here; the foreign namespace case is pinned by tests/fm-control-relaunch.test.sh"
 fi
 
 if [ -r /proc/sys/kernel/random/boot_id ] && [ -e /proc/self/ns/pid ]; then

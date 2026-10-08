@@ -3,9 +3,10 @@
 # lifecycle verbs addressed to an exact task id.
 #
 # Usage: fm-control.sh <task-id> interrupt
-#        fm-control.sh <task-id> exit
+#        fm-control.sh <task-id> exit [--captain-confirms-endpoint-gone]
 #        fm-control.sh <task-id> relaunch [--harness <name>] [--model <name>]
 #                                         [--effort <level>] [--memory-override]
+#                                         [--captain-confirms-endpoint-gone]
 #                                         (--note <text> | --note-file <path>)
 #
 # Why this exists, and how it differs from fm-send.sh. bin/fm-send.sh is the
@@ -51,6 +52,19 @@
 #              ordinary interrupt-then-exit path. A `missing` endpoint the proof
 #              cannot establish as gone REFUSES, because this verb will not
 #              claim a stop it cannot see.
+#              --captain-confirms-endpoint-gone (exit and relaunch) settles ONE
+#              such refusal, and only on the captain's explicit word that the
+#              Linux system restarted (a WSL2 distro restart) and the window is
+#              gone: a tmux record carrying a full server identity from this
+#              same boot, but from a pid namespace that is not this process's
+#              and could not be shown restarted. Every other unproven state
+#              still refuses with it - a record without that identity, a
+#              recorded server still running on a socket this process does not
+#              address, a pane that only moved, an unreadable read. It is then
+#              reported as `endpoint-gone`, appends a `note:` line naming the
+#              captain's confirmation to state/<id>.status, and, like every
+#              exit and relaunch, discards no work. Never pass it on an agent's
+#              own judgement.
 #   relaunch   Transactionally replace the running agent with a new one, in the
 #              SAME worktree - and the same endpoint whenever that endpoint
 #              still exists - on the same or a newly chosen
@@ -173,6 +187,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-busy-lib.sh
 . "$SCRIPT_DIR/fm-busy-lib.sh"
+# shellcheck source=bin/fm-classify-lib.sh
+. "$SCRIPT_DIR/fm-classify-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh
 . "$SCRIPT_DIR/fm-control-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
@@ -242,6 +258,7 @@ EFFORT_SET=0
 NOTE=
 NOTE_SET=0
 MEMORY_OVERRIDE=0
+CAPTAIN_CONFIRMS_GONE=0
 control_want_value=
 for control_arg in "$@"; do
   if [ -n "$control_want_value" ]; then
@@ -273,6 +290,7 @@ for control_arg in "$@"; do
     --note=*) NOTE=${control_arg#--note=}; NOTE_SET=1 ;;
     --note-file) control_want_value=note_file ;;
     --memory-override) MEMORY_OVERRIDE=1 ;;
+    --captain-confirms-endpoint-gone) CAPTAIN_CONFIRMS_GONE=1 ;;
     --note-file=*)
       [ -f "${control_arg#--note-file=}" ] || die "--note-file '${control_arg#--note-file=}' is not a readable file"
       NOTE=$(cat "${control_arg#--note-file=}")
@@ -291,6 +309,10 @@ if [ "$VERB" != relaunch ]; then
     && [ "$MEMORY_OVERRIDE" = 0 ] \
     || die "--harness, --model, --effort, --note, and --memory-override apply to 'relaunch' only"
 fi
+case "$VERB:$CAPTAIN_CONFIRMS_GONE" in
+  exit:*|relaunch:*|*:0) ;;
+  *) die "--captain-confirms-endpoint-gone applies to 'exit' and 'relaunch' only" ;;
+esac
 [ "$HARNESS_SET" = 0 ] || [ -n "$NEW_HARNESS" ] || die "--harness requires a non-empty value"
 [ "$MODEL_SET" = 0 ] || [ -n "$NEW_MODEL" ] || die "--model requires a non-empty value"
 [ "$EFFORT_SET" = 0 ] || [ -n "$NEW_EFFORT" ] || die "--effort requires a non-empty value"
@@ -563,7 +585,7 @@ retire_busy_incarnation() {
 # do_exit: stop the running agent, preserving endpoint and worktree. Prints
 # `already-stopped`, `endpoint-gone`, or `stopped`.
 do_exit() {
-  local state cmd hazard verdict composer_state cancel absence interrupt_result=not-needed
+  local state cmd hazard verdict composer_state cancel absence confirmed='' status_note interrupt_result=not-needed
   require_state_verified_backend exit
   state=$(agent_state)
   case "$state" in
@@ -577,8 +599,19 @@ do_exit() {
       # "destroyed" with "unreachable from this seat". Route it through the
       # control plane's one absence proof - the same one the relaunch gate uses
       # - and report what that proof actually established, never more.
-      absence=$(fm_control_endpoint_absence_verdict "$BACKEND" "$T" "$META")
+      [ "$CAPTAIN_CONFIRMS_GONE" = 0 ] || confirmed=captain-confirmed
+      absence=$(fm_control_endpoint_absence_verdict "$BACKEND" "$T" "$META" "$confirmed")
       case "${absence%%$'\t'*}" in
+        confirmed)
+          # Not proven: the captain's word stands in for the proof, so the
+          # task's status log keeps the record of whose word that was.
+          if ! status_note=$(status_stamp_line "note: $VERB of $ID treated endpoint $T as gone on the captain's explicit word (--captain-confirms-endpoint-gone); ${absence#*$'\t'}") \
+             || ! printf '%s\n' "$status_note" >> "$STATE/$ID.status"; then
+            die "could not record the captain's confirmation in $STATE/$ID.status; nothing was done on its strength"
+          fi
+          printf 'endpoint-gone'
+          return 0
+          ;;
         gone)
           # Proven gone, so the agent that lived in it went with it: exit's
           # postcondition already holds and there is nothing to send. Its own
@@ -1026,6 +1059,7 @@ do_relaunch() {
   [ "$TARGET_MODEL" = default ] || spawn_args+=(--model "$TARGET_MODEL")
   [ "$TARGET_EFFORT" = default ] || spawn_args+=(--effort "$TARGET_EFFORT")
   if FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" FM_MEMORY_ADMITTED="$ID" \
+      FM_CAPTAIN_CONFIRMED_GONE="$([ "$CAPTAIN_CONFIRMS_GONE" = 0 ] || printf '%s' "$ID")" \
       "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" >/dev/null; then
     RELAUNCH_META_PUBLISHED=1
     # $T was resolved from the record before the launch. When the recorded
