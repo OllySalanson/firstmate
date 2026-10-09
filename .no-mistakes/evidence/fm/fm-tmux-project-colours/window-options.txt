@@ -1,0 +1,8 @@
+clerk-invoice-fix (project ready-reckoner): window-status-style=fg=colour130,bold current=bg=colour130,fg=colour231,bold
+rr-clerk-vat (project ready-reckoner): window-status-style=fg=colour130,bold current=bg=colour130,fg=colour231,bold
+rr-quote-tub (project ready-reckoner): window-status-style=fg=colour28,bold current=bg=colour28,fg=colour231,bold
+cc-inbox (project customer-care): window-status-style=fg=colour33,bold current=bg=colour33,fg=colour231,bold
+eptw-map (project escape-from-pallet-town-web): window-status-style=fg=colour160,bold current=bg=colour160,fg=colour231,bold
+nbs-catalogue (project nut-and-bolt-store): window-status-style=fg=colour208,bold current=bg=colour208,fg=colour231,bold
+fm-watchdog (project firstmate): window-status-style=fg=colour245,bold current=bg=colour245,fg=colour231,bold
+misc-x (project other-repo): window-status-style= current=

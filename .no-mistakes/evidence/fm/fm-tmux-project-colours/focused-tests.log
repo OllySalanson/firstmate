@@ -1,0 +1,97 @@
+=== fm-tmux-colour
+ok - an absent config/tmux-colours leaves the window uncoloured and silent
+ok - a matching prefix rule beats an earlier project rule
+ok - a project rule colours a task no prefix rule matches
+ok - a task no rule matches stays uncoloured
+ok - a #rrggbb colour is accepted
+ok - a matching rule with a bad colour reports once and stays uncoloured
+ok - malformed lines are reported once each and skipped
+ok - a colour carrying extra style syntax is refused
+ok - fm-spawn colours a fresh tmux window from config/tmux-colours
+ok - fm-spawn without config/tmux-colours behaves as before
+ok - fm-spawn reports a bad colour once and launches uncoloured
+rc=
+=== fm-control-relaunch
+ok - fm-spawn --relaunch: pending closes refuse before replacement begins
+ok - fm-spawn --relaunch: every identity axis comes from the record, and a contradicting flag refuses
+ok - fm-spawn --relaunch: an unrecorded task is refused
+ok - fm-spawn --relaunch: refuses to start a replacement outside the copy holding its work
+ok - tmux: a window absent from its session refuses both verbs rather than being assumed gone
+ok - tmux: an unfindable session refuses both verbs, so a live agent is never duplicated
+ok - tmux: a dead server on this socket refuses both verbs rather than proving absence
+ok - tmux: after a machine restart, relaunch reclaims a task whose window is gone without a hand-made window
+ok - tmux: a window whose server process exited is proven gone and reclaimed
+ok - tmux: a reclaimed window is coloured from config/tmux-colours
+ok - tmux: a recorded server pid now held by a later process proves the server gone
+ok - tmux: a pane id missing from its own running server's inventory is proven gone
+ok - tmux: a window that survives under another address refuses both verbs
+ok - tmux: a recorded server that is still running but not addressed here refuses both verbs
+ok - tmux: a server pid recorded in another pid namespace is never read as exited
+ok - tmux: after a distro restart on an unchanged boot, relaunch reclaims a task recorded with its incarnation
+ok - tmux: a foreign pid namespace is never read as a restart from a sandbox or an older system
+ok - tmux: a later pid namespace is a restart only of the same system, never of another distro
+ok - tmux: a pid 1 start read from inside a sandbox is never recorded as the incarnation
+ok - tmux: on the captain's word, exit and relaunch reclaim a legacy record from an ended distro and log it
+ok - tmux: the captain's word settles only a different pid namespace on the same boot
+ok - tmux: a record with only its boot identity proves nothing within that boot
+ok - tmux: a record written before endpoint identity existed refuses and says why
+ok - tmux: a relaunch replaces the record's endpoint identity with the live window's
+ok - tmux: a reclaim that aborts before publication closes the window it re-created
+ok - reclaim: an unclassifiable endpoint is still refused, so two agents cannot share one
+ok - reclaim: a herdr pane that outlived its stopped server is adopted, never orphaned beside a new tab
+ok - fm-control exit: a herdr pane that outlived its stopped server is already-stopped, not gone
+ok - reclaim: a herdr rebind is created in the session the record names, never the ambient one
+ok - reclaim: a herdr agent that came back with its server refuses, so one worktree keeps one agent
+ok - reclaim: a herdr reclaim rebinds the endpoint and leaves the whole rest of the task alone
+ok - reclaim: a herdr secondmate whose endpoint is gone is sent to its own respawn owner
+ok - reclaim: a rebind refused from a plain shell reports the real cause, not a fabricated session mismatch
+ok - relaunch re-reads the backlog item instead of blindly re-running the transition
+ok - relaunch heals an item that drifted out of In flight while the task stayed live
+ok - relaunch replaces the worker of an In-flight task held for the captain and keeps the hold
+ok - direct relaunch replaces the worker of an In-flight task held for the captain and keeps the hold
+ok - relaunch still refuses a held Queued item and a non-captain hold
+ok - a fresh spawn of an item held for the captain is still refused
+ok - an interrupted relaunch of a captain-held task verifies the held In-flight row it kept
+rc=
+=== fm-secondmate-harness
+ok - B5c spawn: explicit --backend wins over FM_BACKEND and inherited config/backend
+ok - C2 spawn: a bare harness-only secondmate-harness file launches with no model/effort flag (backward-compat)
+ok - C3 spawn: config/secondmate-harness's model token threads --model into the launch and meta
+ok - C4 spawn: config/secondmate-harness's model+effort tokens thread into the launch and meta
+ok - C5 spawn: an explicit --model overrides config/secondmate-harness's model token; the file's effort token still applies
+ok - C6 spawn: an explicit --effort overrides config/secondmate-harness's effort token; the file's model token still applies
+ok - C7 spawn: an explicit --harness starts with clean model/effort defaults
+ok - C8 spawn: an explicit --harness still honors explicit model/effort flags
+ok - C9 spawn: secondmate launch pins supervision to its own harness
+ok - C9 spawn: the harness fallback chain still resolves with no tokens; crew/scout launches are unaffected by this feature
+ok - B7 bootstrap sweep pushes, re-converges, and mirrors absence; never inherits secondmate-harness
+ok - B8 bootstrap sweep propagates config even when the home's tracked files are already current
+ok - B9 bootstrap sweep defers new inherited config until the home ignores it
+ok - B10 bootstrap sweep materializes and inherits the startup-memory default while fast-forwarding
+ok - B12b backend inheritance: present values and primary absence converge exactly
+ok - C2b spawn: config/claude-permission-mode=auto reaches a Claude secondmate launch
+ok - B12c claude-permission-mode inheritance: present values and primary absence converge exactly
+ok - B12d tmux-colours inheritance: present rules and primary absence converge exactly
+ok - B12c presentation inheritance: the primary default converges on, and only an explicit opt-out propagates off
+ok - B11 bootstrap sweep surfaces config propagation failures
+ok - B11 bootstrap rereads completed config writes after partial propagation
+ok - B12 config-push propagates via shared live discovery, reports items, rereads on change only, and does not fast-forward
+ok - B13 config-push reports dirty, non-allowing, and invalid homes without failing warnings-only runs
+ok - B14 config-push exits nonzero on real propagation errors
+ok - B14 config-push rereads completed config writes after partial propagation
+ok - B15 config reread is per-home, exact-byte, ordered, and pointer-only
+ok - B16 config reread isolation, ABSENT, generation safety, send failure, and retry
+ok - B20 config reread publication failures retain exact generations for retry
+ok - B21 config reread instruction-write failures retain exact retry generations
+ok - B21 config reread preserves exact bytes when temporary adoption also fails
+ok - B21 config reread serializes concurrent propagation and delivery
+ok - B22 full config reread retry queues drain before new publication
+ok - B23 mixed config reread delivery failures still bound sent history
+ok - B26 config reread delivery stops after the oldest failed generation
+ok - B17 config reread skips unchanged homes and reads destination post-write bytes
+ok - B18 bootstrap config reread path works; spawn flexibility remains defaults-only
+ok - B19 bootstrap respawns before inherited-config reread
+ok - B25 spawn quarantines stale rereads without blocking relaunch
+ok - B24 bootstrap detect-only mode remains filesystem read-only
+# all fm-secondmate-harness tests passed
+rc=
