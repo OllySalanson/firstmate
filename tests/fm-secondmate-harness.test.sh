@@ -15,7 +15,7 @@
 #   B) Inheritance. The primary pushes a declared, extensible set of LOCAL
 #      (gitignored) config items - config/crew-dispatch.json, config/crew-harness,
 #      config/backlog-backend, config/backend, config/herdr-presentation-spaces,
-#      config/startup-memory-budget, and config/trace-context -
+#      config/startup-memory-budget, config/trace-context, and config/tmux-colours -
 #      down into each secondmate home's config/, so the secondmate's OWN crewmates,
 #      dispatch profiles, backlog backend, runtime-backend default, Herdr
 #      presentation choice, startup-memory budget, and trace context inherit the
@@ -1033,7 +1033,7 @@ new_world() {
     [ "$dispatch_ignore" = no ] || printf 'config/crew-dispatch.json\n'
     printf 'config/crew-harness\nconfig/secondmate-harness\nconfig/backlog-backend\n'
     printf 'config/backend\nconfig/herdr-presentation-spaces\nconfig/startup-memory-budget\n'
-    printf 'config/claude-permission-mode\n'
+    printf 'config/claude-permission-mode\nconfig/tmux-colours\n'
   } > "$w/main/.gitignore"
   printf 'v1\n' > "$w/main/AGENTS.md"
   printf 'r1\n' > "$w/main/README.md"
@@ -1463,6 +1463,30 @@ test_claude_permission_mode_inheritance_present_and_absent() {
   expect_code 0 "$status" "claude-permission-mode absence push should succeed"
   [ -e "$w/sm/config/claude-permission-mode" ] && fail "claude-permission-mode not removed on primary absence"
   pass "B12c claude-permission-mode inheritance: present values and primary absence converge exactly"
+}
+
+# The worker window colour rules are a captain-wide preference, so a
+# secondmate's own tmux crewmates are coloured by the primary's rules.
+test_tmux_colours_inheritance_present_and_absent() {
+  local w head out err status
+  w=$(new_world tmuxcolours-inherit)
+  head=$(git -C "$w/main" rev-parse HEAD)
+  add_sm_worktree "$w" sm "$head"
+
+  printf '%s\n' 'prefix rr-clerk- colour130' 'project ready-reckoner colour28' > "$w/home/config/tmux-colours"
+  err="$w/tmuxcolours-inherit.err"
+  out=$(run_config_push "$w" 2>"$err"); status=$?
+  expect_code 0 "$status" "tmux-colours present push should succeed"
+  assert_contains "$out" "tmux-colours: pushed" "present rules should report pushed"
+  cmp -s "$w/home/config/tmux-colours" "$w/sm/config/tmux-colours" || fail "tmux-colours rules not pushed"
+  [ "$(. "$ROOT/bin/fm-tmux-colour-lib.sh"; fm_tmux_colour_resolve "$w/sm/config/tmux-colours" rr-clerk-1 ready-reckoner)" = colour130 ] \
+    || fail "secondmate home did not resolve the inherited prefix colour"
+
+  rm -f "$w/home/config/tmux-colours"
+  out=$(run_config_push "$w" 2>"$err"); status=$?
+  expect_code 0 "$status" "tmux-colours absence push should succeed"
+  [ -e "$w/sm/config/tmux-colours" ] && fail "tmux-colours not removed on primary absence"
+  pass "B12d tmux-colours inheritance: present rules and primary absence converge exactly"
 }
 
 test_backend_inheritance_present_and_absent() {
@@ -2228,8 +2252,9 @@ SH
       "$ROOT/bin/fm-config-push.sh" > "$first_out" 2>&1
   ) &
   first_pid=$!
-  for _ in $(seq 1 100); do
+  for _ in $(seq 1 1500); do
     [ -e "$entered" ] && break
+    kill -0 "$first_pid" 2>/dev/null || break
     sleep 0.02
   done
   [ -e "$entered" ] || fail "first config push did not reach pointer delivery"
@@ -2665,6 +2690,7 @@ test_bootstrap_sweep_materializes_and_inherits_memory_default
 test_backend_inheritance_present_and_absent
 test_spawn_secondmate_claude_permission_mode_auto
 test_claude_permission_mode_inheritance_present_and_absent
+test_tmux_colours_inheritance_present_and_absent
 test_presentation_inheritance_default_on_and_opt_out
 test_bootstrap_sweep_surfaces_config_propagation_failure
 test_bootstrap_rereads_after_partial_propagation

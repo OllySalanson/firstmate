@@ -581,6 +581,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-secondmate-nudge-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-tmux-colour-lib.sh
+. "$SCRIPT_DIR/fm-tmux-colour-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh
 . "$SCRIPT_DIR/fm-control-lib.sh"
 # shellcheck source=bin/fm-gate-refuse-lib.sh
@@ -3651,6 +3653,13 @@ fi
 # WT_TARGET to $T for them (and for any future backend) - the shared treehouse-get +
 # worktree-detection steps below must never reference an unbound WT_TARGET under set -u.
 : "${WT_TARGET:=$T}"
+# Colour a tmux window by task or project from the optional captain-private
+# config/tmux-colours (bin/fm-tmux-colour-lib.sh owns the format). This runs for
+# a fresh window and for every relaunch, adopted or re-created alike, and never
+# fails the spawn. Other backends ignore the setting.
+if [ "$BACKEND" = tmux ]; then
+  fm_tmux_colour_apply "$WT_TARGET" "$ID" "$(basename "$PROJ_ABS")" "$CONFIG"
+fi
 spawn_send_text_line() { # <target> <text>
   case "$BACKEND" in
   tmux) fm_backend_tmux_send_text_line "$1" "$2" ;;

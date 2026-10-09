@@ -31,6 +31,7 @@ tmux attach -t firstmate
 ```
 
 Each task window is named `fm-<id>`.
+To colour window tabs by task prefix or project, see [Worker window colours](configuration.md#worker-window-colours-configtmux-colours).
 
 ```sh
 tmux list-windows -t <session-name>
