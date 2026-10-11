@@ -689,6 +689,18 @@ lay_out_as_pool_slot() {
   SLOT_CLAIM="$slot_root/1/.fm-slot-owner"
 }
 
+# Swap the case's no-op treehouse for one that records each call, so a suite can
+# assert which leases a spawn returned.
+log_treehouse_calls() {
+  TREEHOUSE_LOG="$CASE_DIR/treehouse.log"
+  : > "$TREEHOUSE_LOG"
+  cat > "$FAKEBIN_DIR/treehouse" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> '$TREEHOUSE_LOG'
+SH
+  chmod +x "$FAKEBIN_DIR/treehouse"
+}
+
 # The spawn side of the slot-owner claim that bin/fm-teardown.sh later reads:
 # a launched task's claim names it, a slot that cannot be claimed refuses before
 # anything is published, and an abort while the allocation lock is still held
@@ -700,9 +712,14 @@ test_pool_slot_claim_follows_the_spawn_outcome() {
   rec=$(make_case slot-claim "$id")
   read_case_record "$rec"
   lay_out_as_pool_slot
-  out=$(run_spawn "$id" --scout)
+  log_treehouse_calls
+  out=$(FM_FAKE_PANE_LOG="$CASE_DIR/pane.log" run_spawn "$id" --scout)
   status=$?
   expect_code 0 "$status" "spawn from a Treehouse slot should launch"$'\n'"$out"
+  assert_grep "cd -- \"\$(treehouse get --lease --lease-holder '$id')\"" "$CASE_DIR/pane.log" \
+    "spawn did not take its slot as a durable lease held under the task id"
+  assert_no_grep 'return' "$TREEHOUSE_LOG" \
+    "a launched spawn returned the slot its record names"
   assert_grep "worktree=$POOL_DIR" "$HOME_DIR/state/$id.meta" \
     "spawn did not publish the relocated slot as its worktree"
   [ -f "$SLOT_CLAIM" ] || fail "spawn left its Treehouse slot unclaimed: $out"
@@ -716,6 +733,7 @@ test_pool_slot_claim_follows_the_spawn_outcome() {
   read_case_record "$rec"
   lay_out_as_pool_slot
   mkdir -p "$SLOT_CLAIM"
+  log_treehouse_calls
   before=$(git -C "$POOL_DIR" rev-parse HEAD)
   out=$(run_spawn "$id" --scout)
   status=$?
@@ -726,6 +744,8 @@ test_pool_slot_claim_follows_the_spawn_outcome() {
   [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "spawn published a record for an unclaimable slot"
   [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$before" ] \
     || fail "spawn moved the slot's HEAD after failing to claim it"
+  grep -Fxq -- "return --force --if-lease-holder $id $POOL_DIR" "$TREEHOUSE_LOG" \
+    || fail "the refused spawn did not return the slot it leased: $(cat "$TREEHOUSE_LOG")"
 
   id='pool-slot-claim-aborted-r1'
   rec=$(make_originless_case slot-claim-aborted "$id")
@@ -743,8 +763,67 @@ test_pool_slot_claim_follows_the_spawn_outcome() {
   pass "a Treehouse slot claim names the launched task, refuses when unclaimable, and is dropped by a locked abort"
 }
 
+# The double allocation end to end, against the real Treehouse: run the slot
+# acquisition fm-spawn actually sends to its pane, let that holder's processes
+# die - the shape of a restart - and run the next task's acquisition. A plain
+# process lease lapses with its holder and hands the same slot out again while
+# the first task's record still names it; the durable lease spawn takes must
+# not. Both slots are returned afterwards.
+test_spawned_slot_lease_survives_its_holder_dying() {
+  local real_treehouse rec first second line_a line_b slot_a slot_b slot pool_root realbin out
+  real_treehouse=$(command -v treehouse 2>/dev/null || true)
+  if [ -z "$real_treehouse" ]; then
+    echo "skip: treehouse not installed; the durable-lease check needs the real pool"
+    return 0
+  fi
+  first='pool-lease-first-r1'
+  second='pool-lease-second-r1'
+  rec=$(make_case lease-survives "$first")
+  read_case_record "$rec"
+  fm_test_spawn_brief "$HOME_DIR" "$second"
+  out=$(FM_FAKE_PANE_LOG="$CASE_DIR/pane-a.log" run_spawn "$first" --scout)
+  expect_code 0 "$?" "the first spawn should launch"$'\n'"$out"
+  out=$(FM_FAKE_PANE_LOG="$CASE_DIR/pane-b.log" run_spawn "$second" --scout)
+  expect_code 0 "$?" "the second spawn should launch"$'\n'"$out"
+  line_a=$(grep -F 'treehouse get' "$CASE_DIR/pane-a.log") \
+    || fail "the first spawn sent no Treehouse acquisition to its pane"
+  line_b=$(grep -F 'treehouse get' "$CASE_DIR/pane-b.log") \
+    || fail "the second spawn sent no Treehouse acquisition to its pane"
+
+  pool_root="$CASE_DIR/treehouse-root"
+  realbin="$CASE_DIR/real-bin"
+  mkdir -p "$pool_root" "$realbin" "$CASE_DIR/treehouse-user"
+  ln -s "$real_treehouse" "$realbin/treehouse"
+  # Each acquisition runs in its own shell that then exits, so nothing of the
+  # holder survives: whatever still keeps its slot is Treehouse's own record.
+  # shellcheck disable=SC2016 # $1 expands inside the pane-like child shell.
+  slot_a=$(cd "$PROJECT_DIR" && HOME="$CASE_DIR/treehouse-user" TREEHOUSE_ROOT="$pool_root" \
+    PATH="$realbin:$PATH" bash -c 'eval "$1" && pwd -P' _ "$line_a" </dev/null 2>"$CASE_DIR/lease-a.err") \
+    || fail "the first task's acquisition failed against the real Treehouse: $(cat "$CASE_DIR/lease-a.err")"
+  # shellcheck disable=SC2016 # $1 expands inside the pane-like child shell.
+  slot_b=$(cd "$PROJECT_DIR" && HOME="$CASE_DIR/treehouse-user" TREEHOUSE_ROOT="$pool_root" \
+    PATH="$realbin:$PATH" bash -c 'eval "$1" && pwd -P' _ "$line_b" </dev/null 2>"$CASE_DIR/lease-b.err") \
+    || fail "the second task's acquisition failed against the real Treehouse: $(cat "$CASE_DIR/lease-b.err")"
+  for slot in "$slot_a" "$slot_b"; do
+    case "$slot" in
+      "$pool_root"/*) ;;
+      *) fail "an acquisition did not enter a Treehouse pool slot: '$slot'" ;;
+    esac
+  done
+  ( cd "$PROJECT_DIR" && HOME="$CASE_DIR/treehouse-user" TREEHOUSE_ROOT="$pool_root" \
+    "$real_treehouse" return --force --if-lease-holder "$second" "$slot_b" ) >/dev/null 2>&1 \
+    || fail "the second slot was not leased under its task id"
+  ( cd "$PROJECT_DIR" && HOME="$CASE_DIR/treehouse-user" TREEHOUSE_ROOT="$pool_root" \
+    "$real_treehouse" return --force --if-lease-holder "$first" "$slot_a" ) >/dev/null 2>&1 \
+    || fail "the first slot was not leased under its task id"
+  [ "$slot_a" != "$slot_b" ] \
+    || fail "the pool handed $first's slot to $second after $first's holder died: $slot_a"
+  pass "a spawned slot stays leased to its task after the holder dies, so the pool never hands it out twice"
+}
+
 test_remote_seeded_home_spawns_from_treehouse_pool
 test_pool_slot_claim_follows_the_spawn_outcome
+test_spawned_slot_lease_survives_its_holder_dying
 test_linked_spawning_home_rejects_primary_before_refresh
 test_stale_pool_base_refreshes_before_branching
 test_non_main_default_branch_refreshes_before_branching

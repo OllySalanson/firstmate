@@ -8,7 +8,7 @@
 # default (tmux, `backend=` absent) path stays byte-identical. Sourced only
 # through bin/fm-backend.sh's fm_backend_source, never directly.
 #
-# Worktree acquisition (running `treehouse get` inside the pane, and polling
+# Worktree acquisition (taking the Treehouse lease inside the pane, and polling
 # its cwd) is unchanged by this extraction: P1 scopes only the session
 # provider, not the worktree provider, so fm-spawn.sh still drives that part
 # inline with these same send/current-path primitives.

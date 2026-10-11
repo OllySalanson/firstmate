@@ -968,6 +968,72 @@ test_reassigned_pool_slot_finishes_own_cleanup_without_touching_the_slot() {
   pass "fm-teardown: a pool slot claimed by another task is left alone while the task's own cleanup finishes"
 }
 
+# The double allocation itself (observed 2026-10-06 and 2026-10-11): a task's
+# worker died in a restart, the pool handed its slot to a second task, and BOTH
+# records now name the slot. The claim names the second task, which proves the
+# first record is the stale one. The stale record retires without touching the
+# slot even though the claimant's record names it too, and the claimant then
+# tears down normally and returns the slot. Tearing the claimant down first
+# still refuses, and says which record to retire.
+test_double_allocated_slot_retires_the_stale_record_then_the_claimant() {
+  local dir stale=stale-task live=live-task worker rc
+
+  dir=$(make_case slot-double-allocated)
+  mark_case_as_treehouse_pool "$dir"
+  rm -f "$dir/worktree/sentinel"
+  fm_write_meta "$dir/home/state/$stale.meta" \
+    "window=firstmate:fm-$stale" "endpoint_task_id=$stale" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=ship"
+  fm_write_meta "$dir/home/state/$live.meta" \
+    "window=firstmate:fm-$live" "endpoint_task_id=$live" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
+  claim_pool_slot "$dir" "$live"
+  : > "$dir/worktree/live-work"
+  # Staged in this shell, not a command substitution: a background child of a
+  # $(...) subshell does not outlive it, and the point of this worker is to be
+  # alive in the slot while teardown runs.
+  ( cd "$dir/worktree" && exec sleep 30 ) &
+  worker=$!
+
+  set +e
+  FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" \
+  FM_RUNTIME_LOG="$dir/runtime.log" PATH="$dir/fakebin:$PATH" \
+    "$TEARDOWN" "$live" > "$dir/claimant-first.out" 2> "$dir/claimant-first.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "the claimant tore down while a stale record still named its slot"
+  assert_present "$dir/home/state/$live.meta" "the refused claimant teardown removed its record"
+  [ ! -s "$dir/runtime.log" ] \
+    || fail "the refused claimant teardown reached the runtime: $(cat "$dir/runtime.log")"
+  assert_contains "$(cat "$dir/claimant-first.err")" "tear down $stale first" \
+    "the claimant's refusal should name the stale record to retire first"
+
+  set +e
+  FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" \
+  FM_RUNTIME_LOG="$dir/runtime.log" PATH="$dir/fakebin:$PATH" \
+    "$TEARDOWN" "$stale" > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "the stale record of a double-allocated slot could not be retired: $(cat "$dir/stderr")"
+  assert_absent "$dir/home/state/$stale.meta" "retiring the stale record left it behind"
+  assert_present "$dir/home/state/$live.meta" "retiring the stale record removed the claimant's record"
+  kill -0 "$worker" 2>/dev/null || fail "retiring the stale record killed the claimant's worker"
+  assert_present "$dir/worktree/live-work" "retiring the stale record reset the claimant's copy"
+  assert_reassigned_slot_left_alone "$dir" "$stale" "$live" "stale record of a double-allocated slot"
+  kill "$worker" 2>/dev/null || true
+  wait "$worker" 2>/dev/null || true
+
+  : > "$dir/runtime.log"
+  run_case "$dir" "$live" > "$dir/claimant.out" 2> "$dir/claimant.err" \
+    || fail "the claimant did not tear down once the stale record was retired: $(cat "$dir/claimant.err")"
+  assert_absent "$dir/home/state/$live.meta" "the claimant teardown left its record"
+  assert_absent "$dir/pool/1/.fm-slot-owner" "the claimant teardown left its spent slot claim"
+  grep -Fq "treehouse <return>" "$dir/runtime.log" \
+    || fail "the claimant teardown did not return its pool slot: $(cat "$dir/runtime.log")"
+
+  pass "fm-teardown: a double-allocated slot's stale record retires without touching the slot, then the claimant returns it"
+}
+
 # The two states that must never become a false refusal: the task's own claim,
 # and no claim at all (a slot taken before claims existed, or already returned).
 test_own_and_absent_slot_claims_still_tear_down() {
@@ -1388,6 +1454,7 @@ test_reused_pool_slot_refuses_before_touching_the_other_task
 test_cross_home_pool_slot_collision_refuses
 test_sole_slot_record_still_tears_down
 test_reassigned_pool_slot_finishes_own_cleanup_without_touching_the_slot
+test_double_allocated_slot_retires_the_stale_record_then_the_claimant
 test_own_and_absent_slot_claims_still_tear_down
 test_recorded_endpoint_that_changed_directory_still_tears_down
 test_project_lock_anchors_at_the_local_root_across_home_layouts

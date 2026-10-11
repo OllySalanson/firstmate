@@ -280,8 +280,8 @@ test_spawn_tmux_window_construction() {
     "must disable allow-rename on the spawned window"
 
   # Bug 2 fix (b): treehouse-get and the worktree wait loop target the stable id.
-  assert_grep "send-keys -t $(fm_test_fake_tmux_pane @7) treehouse get Enter" "$rec" \
-    "treehouse get must be sent to the stable window id"
+  assert_grep "send-keys -t $(fm_test_fake_tmux_pane @7) cd -- \"\$(treehouse get --lease --lease-holder 'rec-win-gg7')\" Enter" "$rec" \
+    "the leased treehouse get must be sent to the stable window id"
   assert_grep "display-message -p -t @7 #{pane_current_path}" "$rec" \
     "the worktree wait loop must query the stable window id, not the name"
 

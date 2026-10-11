@@ -83,10 +83,12 @@
 # name a slot a DIFFERENT live task now holds. Cleanup kills every process under
 # that path and hard-resets it before returning it, so releasing a slot that is
 # not genuinely this task's destroys another worker's live work. Before the first
-# cleanup step, teardown verifies record exclusivity: no OTHER task record in
-# this home or any locally registered Firstmate home may name the same live path
-# in its worktree= or home=. One live path with two task records is the reuse
-# collision itself, whichever record is stale.
+# cleanup step, teardown determines ownership from the slot's claim (below) and,
+# unless that proves the slot was reassigned, verifies record exclusivity: no
+# OTHER task record in this home or any locally registered Firstmate home may
+# name the same live path in its worktree= or home=. Without a claim naming
+# another task, one live path with two task records is the reuse collision
+# itself, whichever record is stale, and refuses.
 # That scan alone cannot prove THIS record is the current owner, because the task
 # that took the slot next may leave no record it can reach - its own worker may
 # have exited and its record been cleaned up, or it may live in a home this
@@ -100,7 +102,11 @@
 # status, records, checks, backlog - while every step that would read or touch
 # that slot is skipped: no process kill under it, no dirty or landed-work
 # inspection of it, no branch or hook removal in it, no Treehouse return, and
-# never the other task's claim. Skipping the inspection discards nothing of this
+# never the other task's claim. Because none of the slot is touched, a second
+# record naming it - typically the claimant's own - is no reason to refuse, and
+# the exclusivity scan is skipped: this is the supported way to retire a stale
+# record whose slot was double-allocated, after which the claimant tears down
+# normally. Skipping the inspection discards nothing of this
 # task's: whatever unlanded work it had in that slot was already destroyed when
 # the pool handed the slot on. Refusing instead would strand the record, because
 # bin/fm-backend.sh's endpoint validation refuses an empty or missing worktree=
@@ -2293,7 +2299,12 @@ require_exclusive_worktree_slot_record() {
         [ "$other_slot" = "$slot" ] || continue
         echo "REFUSED: task $record_id's recorded worktree $slot is also task $other_id's recorded $field." >&2
         echo "Returning that pool slot would kill $other_id's processes and reset its copy, so nothing was changed - not even with --force." >&2
-        echo "Reconcile whichever record is wrong (bin/fm-crew-state.sh $record_id; bin/fm-crew-state.sh $other_id), then re-run teardown." >&2
+        fm_treehouse_slot_owner_state "$slot" "$record_id"
+        if [ "$FM_TREEHOUSE_SLOT_OWNER" = mine ]; then
+          echo "The slot's owner claim names $record_id, so $other_id's record is the stale one: tear down $other_id first, which retires its record without touching the slot, then re-run this teardown." >&2
+        else
+          echo "Reconcile whichever record is wrong (bin/fm-crew-state.sh $record_id; bin/fm-crew-state.sh $other_id), then re-run teardown." >&2
+        fi
         return 1
       done
     done
@@ -2889,11 +2900,11 @@ preflight_descendant_treehouse_slots() {
       continue
     fi
     fm_backend_validate_task_endpoint "$meta" "$task_id" || return 1
-    require_exclusive_worktree_slot_record "$meta" "$task_id" "$state" "$worktree" || return 1
     owner_rc=0
     require_owned_worktree_slot_record "$task_id" "$worktree" || owner_rc=$?
     case "$owner_rc" in
-      0|"$TEARDOWN_SLOT_REASSIGNED_RC") ;;
+      0) require_exclusive_worktree_slot_record "$meta" "$task_id" "$state" "$worktree" || return 1 ;;
+      "$TEARDOWN_SLOT_REASSIGNED_RC") ;;
       *) return 1 ;;
     esac
   done
@@ -3238,8 +3249,12 @@ remove_secondmate_registry_entry() {
   return "$rc"
 }
 
-require_exclusive_task_worktree_slot || exit 1
+# Ownership first: a slot the claim proves was reassigned is never touched, so
+# whichever other record also names it is no reason to refuse retiring this one.
 require_owned_task_worktree_slot || exit 1
+if teardown_owns_worktree; then
+  require_exclusive_task_worktree_slot || exit 1
+fi
 
 validate_pr_poll_cleanup "$STATE" "$ID" || exit 1
 
