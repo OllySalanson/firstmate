@@ -444,16 +444,22 @@ fm_memory_deferred_remove() {  # <state-dir> <task>
 
 # --- events ------------------------------------------------------------------
 
-# fm_memory_event <state-dir> <now> <text>: record one captain-relevant event
-# for the watcher to surface (bin/fm-memory-watchdog.sh poll). The append holds
-# the events lock that poll's trim also holds, so a trim never drops or skips
-# an event; a lock that cannot be taken in time still appends, since losing a
-# stop notice outright is worse than the narrow race.
+# fm_memory_event <state-dir> <now> <text> [--quiet]: record one event
+# ("epoch<TAB>text", plus "<TAB>quiet" with --quiet) for status and history.
+# The watcher surfaces each event to firstmate once (bin/fm-memory-watchdog.sh
+# poll), except a quiet one: a step the watchdog finishes by itself and has
+# already told the worker about, such as a processor or connection throttle
+# starting or ending, gives firstmate nothing to do, so waking it would only
+# cost a no-op turn. The append holds the events lock that poll's trim also
+# holds, so a trim never drops or skips an event; a lock that cannot be taken
+# in time still appends, since losing a stop notice outright is worse than the
+# narrow race.
 fm_memory_event() {
-  local text lock="$1/.memory-watchdog.events.lock" held=0
+  local text lock="$1/.memory-watchdog.events.lock" held=0 quiet=
   text=$(printf '%s' "$3" | tr '\t\n\r' '   ')
+  [ "${4-}" != --quiet ] || quiet=$'\tquiet'
   fm_lock_acquire_wait_bounded "$lock" 5 >/dev/null 2>&1 && held=1
-  printf '%s\t%s\n' "$2" "$text" >>"$1/memory-watchdog.events"
+  printf '%s\t%s%s\n' "$2" "$text" "$quiet" >>"$1/memory-watchdog.events"
   [ "$held" = 0 ] || fm_lock_release "$lock"
 }
 

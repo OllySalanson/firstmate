@@ -42,7 +42,8 @@
 #   fm-memory-watchdog.sh poll
 #       One watcher-cycle call (bin/fm-watch.sh): make sure the loop runs while
 #       this home has task records or deferred work, then print one
-#       `memory-watchdog: ...` summary of events not yet surfaced, or nothing.
+#       `memory-watchdog: ...` summary of the events not yet surfaced, quiet
+#       ones left out, or nothing.
 #   fm-memory-watchdog.sh ensure | loop | tick
 #       ensure starts the detached singleton loop when it is needed and not
 #       running; loop is that process; tick is one loop iteration (tests).
@@ -85,9 +86,10 @@
 #     then pause its commands FM_WATCHDOG_PAUSE_SECS (default 10) and run
 #     them FM_WATCHDOG_RUN_SECS (default 10) in turns while still critical,
 #     and release once the reading falls under the close line; tell the
-#     worker through bin/fm-send.sh and record an event at each step. With
-#     nothing of this home's using enough of it, record one event per
-#     episode. Every exit of the loop, and every poll that finds a pause
+#     worker through bin/fm-send.sh and record a quiet event at each step.
+#     With nothing of this home's using enough of it, record one quiet event
+#     per episode. Quiet events show in status and history but never wake
+#     firstmate. Every exit of the loop, and every poll that finds a pause
 #     overdue by 30 s, continues paused commands, so a dead loop never leaves
 #     them stopped.
 #   - room: when deferred work exists, one more worker fits, and the
@@ -317,7 +319,7 @@ cmd_status() {
   status_history_line "$now"
   if [ -s "$STATE/memory-watchdog.events" ]; then
     echo "recent events:"
-    tail -n 5 "$STATE/memory-watchdog.events" | while IFS="$(printf '\t')" read -r epoch text; do
+    tail -n 5 "$STATE/memory-watchdog.events" | while IFS="$(printf '\t')" read -r epoch text _; do
       printf '  %s  %s\n' "$(date -d "@$epoch" '+%Y-%m-%d %H:%M' 2>/dev/null || date -r "$epoch" '+%Y-%m-%d %H:%M' 2>/dev/null || printf '%s' "$epoch")" "$text"
     done
   fi
@@ -573,8 +575,8 @@ cmd_history() {
     function closespans(   k, i) {
       for (i = 1; i <= nk; i++) { k = keys[i]; if (k in open_at) { spans[k] = spans[k] (spans[k] == "" ? "" : ", ") hm(open_at[k]) " onward" ; delete open_at[k] } }
     }
-    # Event lines have exactly two fields; samples always carry more.
-    NF == 2 && $1 ~ /^[0-9]+$/ { if ($1 >= from && $1 <= to) ev[++ne] = hm($1) "  " $2; next }
+    # Event lines have two fields, or three for a quiet one; samples always carry more.
+    (NF == 2 || (NF == 3 && $3 == "quiet")) && $1 ~ /^[0-9]+$/ { if ($1 >= from && $1 <= to) ev[++ne] = hm($1) "  " $2; next }
     $1 !~ /^[0-9]+$/ || $1 < from || $1 > to { next }
     {
       t = $1; delete v
@@ -988,7 +990,8 @@ throttle_reading() {  # <res>: the resource's current reading in words
 # and run for RUN_SECS in turns; the connection goes straight to pausing,
 # because priority does not slow traffic. At each window end, critical
 # pauses again, high keeps waiting, and anything lower releases. The worker
-# and firstmate hear about each start, escalation, and release.
+# hears about each start, escalation, and release, and each is recorded as a
+# quiet event (fm_memory_event), since it needs nothing from firstmate.
 throttle_step() {
   local res=$1 now=$2 level=$3 rec="$STATE/.watchdog-throttle-$1" since_f="$STATE/.watchdog-$1-critical-since"
   local task stage until since roots stopped pick use what reading msg
@@ -1030,7 +1033,7 @@ throttle_step() {
             throttle_write "$res" "$task" paused $((now + PAUSE_SECS)) "$since" "$roots" "$stopped"
             if [ "$stage" = reniced ]; then
               notify_worker "$task" "that its commands are now being paused in turns for the processor" "$now" "Watchdog: the processor is still overloaded ($reading) even at lower priority, so I am now pausing your running commands for ${PAUSE_SECS} seconds at a time, with ${RUN_SECS} seconds of running in between, until it recovers. Your agent itself is not paused and nothing is killed; a paused command just finishes later. Cut parallelism now - fewer subagents, fewer parallel commands and downloads, capped test workers - and the pausing stops sooner."
-              fm_memory_event "$STATE" "$now" "processor critical: still overloaded ($reading), so the watchdog is now pausing $task's commands in turns and told its worker"
+              fm_memory_event "$STATE" "$now" "processor critical: still overloaded ($reading), so the watchdog is now pausing $task's commands in turns and told its worker" --quiet
             fi
             ;;
           high) throttle_write "$res" "$task" "$stage" $((now + RUN_SECS)) "$since" "$roots" "" ;;
@@ -1042,7 +1045,7 @@ throttle_step() {
               msg="Watchdog: the $what has recovered ($reading), so I stopped pausing your commands. Carry on, but keep parallelism moderate so it does not overload again."
             fi
             notify_worker "$task" "that the $what throttle has ended" "$now" "$msg"
-            fm_memory_event "$STATE" "$now" "$what recovered: the watchdog stopped throttling $task ($reading)"
+            fm_memory_event "$STATE" "$now" "$what recovered: the watchdog stopped throttling $task ($reading)" --quiet
             ;;
         esac
         ;;
@@ -1058,7 +1061,7 @@ throttle_step() {
   if [ -z "$pick" ]; then
     if [ ! -e "$STATE/.watchdog-$res-quiet" ]; then
       : >"$STATE/.watchdog-$res-quiet"
-      fm_memory_event "$STATE" "$now" "$what critical: overloaded for ${FM_CRITICAL_SECS}s ($reading) but no worker of this home is using enough of it to throttle - the load comes from somewhere else (firstmate itself, another home, or the owner's own programs)"
+      fm_memory_event "$STATE" "$now" "$what critical: overloaded for ${FM_CRITICAL_SECS}s ($reading) but no worker of this home is using enough of it to throttle - the load comes from somewhere else (firstmate itself, another home, or the owner's own programs)" --quiet
     fi
     return 0
   fi
@@ -1070,12 +1073,12 @@ EOF_PICK
     fm_load_renice_tree "$roots"
     throttle_write cpu "$task" reniced $((now + FM_CRITICAL_SECS)) "$now" "$roots" ""
     notify_worker "$task" "that its work now runs at lower priority for the processor" "$now" "Watchdog: this machine's processor has been overloaded for ${FM_CRITICAL_SECS} seconds ($reading), and your work is using the most of it (about $use cores). That makes the owner's own programs lag, so I lowered the priority of your agent and its commands. If it stays overloaded I will start pausing your running commands in short turns - nothing is killed. Cut parallelism now: fewer subagents, fewer parallel commands and downloads, capped test workers."
-    fm_memory_event "$STATE" "$now" "processor critical: overloaded for ${FM_CRITICAL_SECS}s ($reading), so the watchdog lowered the priority of $task's work (about $use cores) and told its worker"
+    fm_memory_event "$STATE" "$now" "processor critical: overloaded for ${FM_CRITICAL_SECS}s ($reading), so the watchdog lowered the priority of $task's work (about $use cores) and told its worker" --quiet
   else
     stopped=$(fm_load_stop_tree "$roots" "")
     throttle_write net "$task" paused $((now + PAUSE_SECS)) "$now" "$roots" "$stopped"
     notify_worker "$task" "that its commands are being paused in turns for the connection" "$now" "Watchdog: the internet connection has been overloaded for ${FM_CRITICAL_SECS} seconds ($reading), and your work carries the most traffic (about $use KB/s). That makes the owner's games and browsing lag, so I am pausing your running commands for ${PAUSE_SECS} seconds at a time, with ${RUN_SECS} seconds of running in between, until it recovers. Your agent itself is not paused and nothing is killed. Run fewer downloads and subagents at once, and the pausing stops sooner."
-    fm_memory_event "$STATE" "$now" "connection critical: overloaded for ${FM_CRITICAL_SECS}s ($reading), so the watchdog is pausing $task's commands in turns (about $use KB/s) and told its worker"
+    fm_memory_event "$STATE" "$now" "connection critical: overloaded for ${FM_CRITICAL_SECS}s ($reading), so the watchdog is pausing $task's commands in turns (about $use KB/s) and told its worker" --quiet
   fi
 }
 
@@ -1170,9 +1173,9 @@ poll_locked() {  # the events lock is held
   [ "$cursor" -le "$size" ] || cursor=0
   [ "$cursor" -lt "$size" ] || return 0
   text=$(tail -c +"$((cursor + 1))" "$events" | head -c "$((size - cursor))" |
-    awk -F '\t' 'NF >= 2 { printf "%s%s", sep, $2; sep = "; " }')
+    awk -F '\t' 'NF >= 2 && $3 != "quiet" { printf "%s%s", sep, $2; sep = "; " }')
   if [ "$size" -gt 65536 ]; then
-    # Everything is surfaced, so keep only a short tail for status.
+    # Everything is surfaced or quiet, so keep only a short tail for status.
     tail -n 20 "$events" >"$events.tmp.$$" && mv -f "$events.tmp.$$" "$events"
     rm -f "$events.tmp.$$"
     size=$(wc -c <"$events" | tr -d '[:space:]')

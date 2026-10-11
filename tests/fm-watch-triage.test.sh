@@ -2707,6 +2707,72 @@ test_live_paused_until_controls_recheck_time() {
   pass "a live paused worker stays absorbed until its declared time, then rechecks"
 }
 
+# --- a live worker parked on a declared wait whose pane briefly turns busy ----
+# The 2026-10 map-maker loop: a worker declared `paused:` on the owner's merge and
+# kept re-arming its own merge watch, so its pane went busy for a moment every few
+# minutes and then settled idle again. Each busy moment cleared the declaration's
+# re-surface throttle as if real work had resumed, so the next idle settle took
+# first sight again and woke firstmate with a bare stale wake every 5-15 minutes
+# for the whole wait. The declaration, not the pane, is what the throttle bounds:
+# while the same `paused:` line stands, busy-then-idle cycles stay absorbed, and
+# the window's end still re-surfaces once.
+test_live_declared_wait_busy_flicker_honors_the_resurface_throttle() {
+  local dir state fakebin out capture_file statusf window key sig round wakes throttle
+  dir=$(make_case live-paused-busy-flicker); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/parked.status"
+  window="test:fm-parked"
+  printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\n' "$window" > "$state/parked.meta"
+  printf 'paused: waiting for the owner to merge the PR; merge watch running\n' > "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-parked_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  throttle="$state/.paused-resurfaced-$key"
+
+  printf 'parked, merge watch armed 1' > "$capture_file"
+  printf '%s' "$(hash_text 'parked, merge watch armed 1')" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" exit \
+    || fail "first sight of a parked live worker did not surface"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the first surface"
+  [ -e "$throttle" ] || fail "the first surface recorded no re-surface throttle"
+
+  round=2
+  while [ "$round" -le 3 ]; do
+    # The worker re-arms its merge watch: a short busy turn, well inside the
+    # completed-turn bound, then the same declared wait settles idle again.
+    printf 'parked, re-arming merge watch %s\nCtrl+c:cancel' "$round" > "$capture_file"
+    parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" absorb \
+      || fail "watcher exited while a parked worker was briefly busy (round $round)"
+    [ -e "$throttle" ] || fail "a brief busy turn under the same declared wait cleared the re-surface throttle (round $round)"
+    printf 'parked, merge watch armed %s' "$round" > "$capture_file"
+    parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" absorb \
+      || fail "a parked worker re-alarmed when its pane settled idle after a brief busy turn (round $round): $(cat "$state/.wake-queue" 2>/dev/null)"
+    wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' \
+      "$state/.wake-queue" 2>/dev/null || echo 0)
+    [ "$wakes" -eq 0 ] || fail "busy-then-idle flicker re-alarmed a parked worker $wakes time(s) inside the re-surface window"
+    round=$((round + 1))
+  done
+
+  # A real status change still ends the declaration and its silence: the worker
+  # resumes, so pause bookkeeping clears with the busy turn exactly as before.
+  set_mtime "$(( $(date +%s) - 2000 ))" "$throttle"
+  printf 'parked, merge watch armed 9' > "$capture_file"
+  parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" exit \
+    || fail "a parked worker did not re-surface once its re-surface window elapsed"
+  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' \
+    "$state/.wake-queue" 2>/dev/null || echo 0)
+  [ "$wakes" -eq 1 ] || fail "elapsed re-surface window produced $wakes wakes instead of one"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the elapsed-window re-surface"
+
+  printf 'working: merged, starting stage 5\n' >> "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-parked_status"
+  printf 'stage 5 under way\nCtrl+c:cancel' > "$capture_file"
+  parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" absorb \
+    || fail "a resumed busy worker woke firstmate"
+  [ ! -e "$state/.paused-$key" ] && [ ! -e "$throttle" ] \
+    || fail "lifting the declared wait left pause bookkeeping behind"
+  pass "a parked live worker whose pane briefly turns busy keeps its declared wait's re-surface throttle"
+}
+
 # --- the wedge threshold consults the worker's own declared wait ------------
 # Upstream kunchenguid/firstmate#3909 and #2614: wedge_timer_check escalated on
 # elapsed idle time alone, without ever asking whether the worker had already
@@ -6218,6 +6284,7 @@ test_exited_declared_pause_is_bounded_but_live_gate_surfaces
 test_absorbed_replacement_wait_does_not_inherit_the_old_throttle
 test_live_declared_wait_churn_honors_the_resurface_throttle
 test_live_paused_until_controls_recheck_time
+test_live_declared_wait_busy_flicker_honors_the_resurface_throttle
 test_wedge_threshold_defers_to_a_declared_wait_under_a_working_verdict
 test_wedge_threshold_recheck_names_the_captain_for_a_held_lane
 test_wedge_threshold_defers_to_a_parked_gate_awaiting_a_human

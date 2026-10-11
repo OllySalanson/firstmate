@@ -502,9 +502,10 @@ New spawns and relaunches are deferred while either gate is closed, exactly like
 When the processor or the connection stays past its critical line (defaults: pressure 50% or load 115% of the cores; latency 200 ms above normal) for `critical_secs` (default 30 seconds), the watchdog throttles the worker of this home using the most of it, measured over its whole process tree, and tells that worker why through `bin/fm-send.sh`.
 For the processor it first lowers the priority of the worker's agent and commands; if the processor is still critical after another `critical_secs`, it pauses the worker's commands (SIGSTOP) for ten seconds at a time with ten seconds of running in between (SIGCONT).
 For the connection it goes straight to pausing, since priority does not slow traffic.
-It releases once the reading falls back under its close line, and tells the worker and firstmate at every step; lowered priority stays, because an unprivileged process cannot raise it again, and only matters while the machine is busy.
+It releases once the reading falls back under its close line, and tells the worker at every step; lowered priority stays, because an unprivileged process cannot raise it again, and only matters while the machine is busy.
 Nothing is ever killed, the worker agent process itself is never paused (so it keeps reading its inbox), and nothing outside a recorded ship or scout worker's own process tree - firstmate, a secondmate, the terminal, the no-mistakes daemon, or the owner's own programs - is ever throttled.
-When the overload comes from somewhere else, the watchdog reports that once per episode and throttles nothing.
+When the overload comes from somewhere else, the watchdog records that once per episode and throttles nothing.
+Every throttle step, and that record, shows in `status` and `history` but never wakes firstmate, because the watchdog has already handled it and firstmate has nothing to do.
 Processor use counts commands that already finished, while traffic covers TCP connections only, so a worker's UDP (QUIC) traffic is not attributed.
 Windows-side programs are out of reach: the watchdog sees and controls only WSL.
 

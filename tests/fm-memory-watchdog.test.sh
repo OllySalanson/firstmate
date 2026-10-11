@@ -690,7 +690,8 @@ test_processor_throttle_lowers_priority_then_pauses_then_releases() {
   sent=$(cat "$H/sent.log")
   assert_contains "$sent" "t1"$'\t'"Watchdog: this machine's processor has been overloaded for 1 seconds (pressure 60.0%, load 9.30 on 8 cores (116%))" "the worker was not told why"
   assert_contains "$sent" "lowered the priority of your agent and its commands" "the worker was not told its priority dropped"
-  assert_contains "$(wd poll)" "processor critical: overloaded for 1s (pressure 60.0%, load 9.30 on 8 cores (116%)), so the watchdog lowered the priority of t1's work" "firstmate was not told of the throttle"
+  assert_equals "" "$(wd poll)" "a throttle step the watchdog handled itself woke firstmate"
+  assert_contains "$(wd status)" "processor critical: overloaded for 1s (pressure 60.0%, load 9.30 on 8 cores (116%)), so the watchdog lowered the priority of t1's work" "status did not record the throttle"
   assert_contains "$(tail -n 1 "$H/state/watchdog-history")" "topcpu=t1:" "the history did not record the busiest worker"
   sleep 1.1
   set_ticks "$CMD" 800
@@ -709,9 +710,11 @@ test_processor_throttle_lowers_priority_then_pauses_then_releases() {
   FM_WATCHDOG_SAMPLE=1 FM_WATCHDOG_PAUSE_SECS=1 FM_WATCHDOG_RUN_SECS=1 wd tick
   assert_absent "$H/state/.watchdog-throttle-cpu" "the throttle outlived the overload"
   assert_contains "$(cat "$H/sent.log")" "Watchdog: the processor has recovered" "the worker was not told the overload ended"
-  out=$(wd poll)
-  assert_contains "$out" "processor critical: still overloaded" "firstmate was not told of the escalation"
-  assert_contains "$out" "processor recovered: the watchdog stopped throttling t1" "firstmate was not told of the release"
+  assert_equals "" "$(wd poll)" "a throttle escalation or release woke firstmate"
+  out=$(wd status)
+  assert_contains "$out" "processor critical: still overloaded" "status did not record the escalation"
+  assert_contains "$out" "processor recovered: the watchdog stopped throttling t1 (pressure 4.0%" "status did not record the release"
+  case "$out" in *$'\t'*) fail "status leaked an event's quiet field: $out" ;; esac
   kill -0 "$CMD" 2>/dev/null || fail "the throttle killed a command"
   pass "a processor overload lowers the heaviest worker's priority, then pauses its commands in turns, never its agent, and releases on recovery"
 }
@@ -743,7 +746,8 @@ test_connection_throttle_pauses_the_heaviest_traffic_only() {
   assert_equals S "$(proc_state "$busy_agent")" "the busy worker's agent itself was paused"
   assert_equals S "$(proc_state "$light_cmd")" "a worker carrying less traffic was paused"
   assert_contains "$(cat "$H/sent.log")" "busy"$'\t'"Watchdog: the internet connection has been overloaded for 1 seconds (latency to 1.1.1.1 400 ms against a normal 40 ms), and your work carries the most traffic" "the busy worker was not told"
-  assert_contains "$(wd poll)" "connection critical: overloaded for 1s (latency to 1.1.1.1 400 ms against a normal 40 ms), so the watchdog is pausing busy's commands" "firstmate was not told"
+  assert_equals "" "$(wd poll)" "a connection throttle step woke firstmate"
+  assert_contains "$(wd status)" "connection critical: overloaded for 1s (latency to 1.1.1.1 400 ms against a normal 40 ms), so the watchdog is pausing busy's commands" "status did not record the throttle"
   assert_contains "$(tail -n 1 "$H/state/watchdog-history")" "topnet=busy:" "the history did not record the heaviest traffic"
   sleep 1.1
   set_latency 40 45
@@ -752,11 +756,12 @@ test_connection_throttle_pauses_the_heaviest_traffic_only() {
   sleep 1.1
   FM_WATCHDOG_SAMPLE=1 FM_WATCHDOG_PAUSE_SECS=1 FM_WATCHDOG_RUN_SECS=1 wd tick
   assert_absent "$H/state/.watchdog-throttle-net" "the connection throttle outlived the overload"
-  assert_contains "$(wd poll)" "connection recovered" "firstmate was not told of the release"
+  assert_equals "" "$(wd poll)" "a connection throttle release woke firstmate"
+  assert_contains "$(wd status)" "connection recovered" "status did not record the release"
   pass "a connection overload pauses only the commands of the worker carrying the most traffic, loopback excluded, and releases on recovery"
 }
 
-test_overload_from_elsewhere_reports_once() {
+test_overload_from_elsewhere_records_once() {
   local out
   new_case cpuquiet
   set_mem 40
@@ -767,11 +772,14 @@ test_overload_from_elsewhere_reports_once() {
   sleep 1.1
   FM_WATCHDOG_SAMPLE=1 wd tick
   FM_WATCHDOG_SAMPLE=1 wd tick
-  out=$(wd poll)
-  assert_contains "$out" "processor critical: overloaded for 1s (pressure 80.0%" "the overload was not reported"
-  assert_contains "$out" "no worker of this home is using enough of it to throttle" "the report did not say the load comes from elsewhere"
-  case "$out" in *";"*) fail "the overload from elsewhere was reported twice: $out" ;; esac
-  pass "a processor overload no worker of this home causes is reported once per episode and throttles nothing"
+  assert_equals "" "$(wd poll)" "an overload firstmate cannot act on woke firstmate"
+  out=$(grep -F "no worker of this home is using enough of it to throttle" "$H/state/memory-watchdog.events")
+  assert_contains "$out" "processor critical: overloaded for 1s (pressure 80.0%" "the overload was not recorded"
+  assert_equals 1 "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" "the overload from elsewhere was recorded twice"
+  # A quiet record never holds back an event that does need firstmate.
+  FM_STATE_OVERRIDE="$H/state" bash -c '. "$1/bin/fm-memory-lib.sh"; fm_memory_event "$2" 3 "room for queued work: test"' _ "$ROOT" "$H/state"
+  assert_equals "memory-watchdog: room for queued work: test" "$(wd poll)" "a surfacing event after a quiet one was lost or mixed with it"
+  pass "a processor overload no worker of this home causes is recorded once per episode without waking firstmate, and throttles nothing"
 }
 
 test_poll_continues_commands_a_dead_loop_left_paused() {
@@ -800,7 +808,7 @@ test_history_explains_a_window() {
     printf '%s\tmem=60\tpsi=%s\tload=9.30\tcores=8\tup=250\tdown=500\trtt=180\tbase=38\tgates=mem:open,cpu:%s,net:open\ttopcpu=fm-research:4.20\ttopnet=fm-research:300\tthrottle=%s\n' \
       "$t" "$psi" "$gate" "$thr" >>"$H/state/watchdog-history"
   done
-  printf '%s\tprocessor critical: test event\n' $((base + 160)) >"$H/state/memory-watchdog.events"
+  printf '%s\tprocessor critical: test event\tquiet\n%s\troom for queued work: test event\n' $((base + 160)) $((base + 1500)) >"$H/state/memory-watchdog.events"
   out=$(TZ=UTC wd history --since "$base" --until $((base + 1800))) || fail "history failed: $out"
   assert_contains "$out" "Watchdog history, " "no heading"
   assert_contains "$out" "(60 samples, about one every 15s)" "the sample count was wrong"
@@ -812,7 +820,8 @@ test_history_explains_a_window() {
   assert_contains "$out" "Busiest worker: fm-research used the most processor in 100% of the samples that measured it (up to 4.2 cores) and carried the most traffic in 100% (up to 300 KB/s)." "the busiest worker was not named"
   assert_contains "$out" "Throttle: fm-research was throttled for the processor 17:02-17:20." "the throttle was not explained"
   assert_contains "$out" "Gaps: no samples 17:07-17:17" "the gap was not explained"
-  assert_contains "$out" "17:02  processor critical: test event" "the watchdog's actions were not listed"
+  assert_contains "$out" "17:02  processor critical: test event" "the watchdog's quiet actions were not listed"
+  assert_contains "$out" "17:25  room for queued work: test event" "the watchdog's surfaced actions were not listed"
   assert_contains "$out" "Timeline (5 minute steps):" "no timeline"
   assert_contains "$out" "  17:00  memory 60%  pressure 35%  load 9.3  up 250 KB/s  down 500 KB/s  latency 180 ms  busiest fm-research" "the timeline row was wrong"
   out=$(TZ=UTC wd history --since $((base - 7200)) --until $((base - 3600)))
@@ -926,7 +935,7 @@ test_connection_gate_follows_latency_above_normal
 test_latency_probe_is_harvested_by_the_next_tick
 test_processor_throttle_lowers_priority_then_pauses_then_releases
 test_connection_throttle_pauses_the_heaviest_traffic_only
-test_overload_from_elsewhere_reports_once
+test_overload_from_elsewhere_records_once
 test_poll_continues_commands_a_dead_loop_left_paused
 test_history_explains_a_window
 test_history_window_may_run_past_now
