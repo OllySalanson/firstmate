@@ -187,6 +187,9 @@ fi
 # An unbound project keeps the exact wording it always had.
 PROMOTE_FORGE_WORDS=
 [ "$FORGE" = none ] || PROMOTE_FORGE_WORDS=" forge=$FORGE"
+# The home's checks gate shapes the ship Definition of done exactly as it does
+# for an ordinary ship brief (bin/fm-dod-lib.sh).
+CHECKS_GATE=$(fm_checks_gate_read "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}") || exit 1
 
 SCOUT_BRIEF="$DATA/$ID/brief.md"
 if fm_brief_task_placeholders_present "$SCOUT_BRIEF"; then
@@ -249,7 +252,7 @@ EOF
     printf '%s\n' "$PROMOTION_ASK_USER_BLOCK"
   fi
   printf '\n'
-  fm_dod_block "$MODE" "$ID" "$FORGE"
+  fm_dod_block "$MODE" "$ID" "$FORGE" "$CHECKS_GATE"
 }
 mkdir -p "$DATA/$ID"
 [ ! -d "$INSTRUCTIONS" ] || { echo "error: ship instructions path is a directory: $INSTRUCTIONS" >&2; exit 1; }

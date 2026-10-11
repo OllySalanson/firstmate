@@ -550,7 +550,8 @@ case "$MODE" in
     ;;
 esac
 RULE1=$(fm_ship_rule_one "$MODE" "$ID" "$FORGE") || exit 1
-DOD=$(fm_dod_block "$MODE" "$ID" "$FORGE") || exit 1
+CHECKS_GATE=$(fm_checks_gate_read "$CONFIG") || exit 1
+DOD=$(fm_dod_block "$MODE" "$ID" "$FORGE" "$CHECKS_GATE") || exit 1
 
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.

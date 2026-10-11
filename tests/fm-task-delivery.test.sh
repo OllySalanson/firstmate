@@ -435,6 +435,46 @@ EOF
 # Spawn and promotion refuse leftover Task-subsection placeholders through the
 # public brief/spawn/promote path. Filling both subsections lets the spawn
 # delivery checks proceed (the fake tmux still fails later).
+# A promoted scout ships under the same checks gate as an ordinary ship brief
+# from that home, so a local gate reaches the promoted worker too.
+test_promotion_carries_the_local_checks_gate() {
+  local home out sendroot payload id=promote-gate brief_dod delivered_dod
+  home="$TMP_ROOT/promote-gate/home"
+  sendroot="$TMP_ROOT/promote-gate/sendroot"
+  mkdir -p "$home/state" "$home/config" "$sendroot/bin"
+  printf 'local\n' > "$home/config/checks-gate"
+  cat > "$sendroot/bin/fm-send.sh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s' "$2" > "$FM_TEST_CAPTURE"
+STUB
+  chmod +x "$sendroot/bin/fm-send.sh"
+  printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\n' "$id" > "$home/state/$id.meta"
+  FM_HOME="$home" "$BRIEF" "$id" fixture-project --scout >/dev/null 2>&1 \
+    || fail "local gate: scout brief generation should succeed"
+  fill_brief_subsections "$home/data/$id/brief.md" \
+    "Ship the delivery-contract change." "Preserve the selected delivery mode."
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" "$id" --mode no-mistakes --yolo off 2>&1) \
+    || fail "local gate: promotion should succeed: $out"
+  payload="$TMP_ROOT/promote-gate/payload"
+  ( cd "$sendroot" \
+    && FM_TEST_CAPTURE="$payload" \
+       eval "$(printf '%s\n' "$out" | sed -n 's/^next: //p' | grep 'fm-send\.sh')" ) \
+    || fail "local gate: promotion's delivery command did not run"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'Pass `--skip ci` on every `no-mistakes axi run` for this task' "$payload" \
+    "local gate: the promoted no-mistakes worker was not told to skip forge CI"
+  rm "$home/data/$id/brief.md"
+  FM_HOME="$home" "$BRIEF" "$id" fixture-project --mode no-mistakes >/dev/null 2>&1 \
+    || fail "local gate: ordinary ship brief generation should succeed"
+  brief_dod="$TMP_ROOT/promote-gate/brief-dod"
+  delivered_dod="$TMP_ROOT/promote-gate/delivered-dod"
+  awk '/^# Definition of done$/ { emit=1 } emit' "$home/data/$id/brief.md" > "$brief_dod"
+  awk '/^# Definition of done$/ { emit=1 } emit' "$payload" > "$delivered_dod"
+  cmp -s "$brief_dod" "$delivered_dod" \
+    || fail "local gate: promotion and ordinary brief generation delivered different Definitions of done"
+  pass "a promoted scout receives the home's local checks gate exactly as an ordinary ship brief does"
+}
+
 test_spawn_and_promote_require_filled_task_subsections() {
   local rec home proj fakebin out status id brief meta intent_body spec_body authorized
   rec=$(make_home subsections)
@@ -1345,6 +1385,7 @@ test_scout_records_no_delivery_posture
 test_promote_requires_and_records_the_delivery_contract
 test_promote_refuses_a_symlinked_task_record
 test_promotion_delivers_the_real_definition_of_done
+test_promotion_carries_the_local_checks_gate
 test_project_mode_maps_the_conditional_policy
 test_project_mode_binds_the_forge_orthogonally
 test_project_mode_refuses_only_a_malformed_forge_binding

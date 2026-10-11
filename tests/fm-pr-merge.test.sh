@@ -2408,6 +2408,99 @@ test_github_red_checks_refuse_and_allow_red_waives_named() {
   pass "fm-pr-merge refuses red GitHub checks and waives only a named --allow-red check"
 }
 
+# Under a local checks gate forge checks are advisory: a red check and a queued
+# third-party app check neither refuse nor need --allow-red, and the merge still
+# binds to the live head it verified.
+test_local_checks_gate_merges_past_forge_checks() {
+  local case_dir head url=https://github.com/example/repo/pull/83
+  head=abababababababababababababababababababab
+  case_dir=$(make_case local-gate-advisory)
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json "$case_dir" "$head" \
+    "$(check_run lint COMPLETED FAILURE 2026-01-01T00:00:01Z)" \
+    "$(check_run Cursor QUEUED -)"
+  printf 'local\n' > "$case_dir/home/config/checks-gate"
+  printf 'pr=%s\npr_head=%s\n' "$url" "$head" >> "$case_dir/state/task-x1.meta"
+
+  run_pr_merge "$case_dir" task-x1 "$url" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "local-gate: advisory forge checks must not refuse"$'\n'"$(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 83 example/repo --squash
+  assert_grep "forge check 'lint' is not green; advisory only" "$case_dir/stderr" \
+    "local-gate: the red forge check was not listed as advisory"
+  assert_grep "forge check 'Cursor' is not green; advisory only" "$case_dir/stderr" \
+    "local-gate: the queued app check was not listed as advisory"
+  assert_grep "at the locally validated head $head" "$case_dir/stderr" \
+    "local-gate: the verified head was not named"
+
+  case_dir=$(make_case forge-gate-default)
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json "$case_dir" "$head" "$(check_run Cursor QUEUED -)"
+  printf 'forge\n' > "$case_dir/home/config/checks-gate"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/84 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  local rc=$?
+  set -e
+  expect_code 1 "$rc" "forge-gate: a queued check must still refuse"
+  assert_grep "check 'Cursor' is not green" "$case_dir/stderr" \
+    "forge-gate: the queued check was not named"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "forge-gate: gh pr merge ran on a queued check"
+  pass "the local checks gate merges past red or queued forge checks, which the forge gate still refuses"
+}
+
+# The local gate replaces the forge's head-bound check with the head the ready
+# report's local checks vouched for: a later push, or no recorded head at all,
+# refuses before any merge call.
+test_local_checks_gate_binds_the_locally_validated_head() {
+  local case_dir rc label head=cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd
+  local url=https://github.com/example/repo/pull/85
+  for label in moved absent; do
+    case_dir=$(make_case "local-gate-head-$label")
+    add_gh_mocks "$case_dir" "$head"
+    printf 'local\n' > "$case_dir/home/config/checks-gate"
+    [ "$label" = absent ] \
+      || printf 'pr=%s\npr_head=%s\n' "$url" "$MR_STALE_HEAD" >> "$case_dir/state/task-x1.meta"
+    set +e
+    run_pr_merge "$case_dir" task-x1 "$url" > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 1 "$rc" "local-gate-head-$label: an unvalidated head must refuse"
+    case "$label" in
+      moved)
+        assert_grep "head $head is not the locally validated head $MR_STALE_HEAD" "$case_dir/stderr" \
+          "local-gate-head-moved: the moved head was not named"
+        ;;
+      absent)
+        assert_grep 'no locally validated head is recorded' "$case_dir/stderr" \
+          "local-gate-head-absent: the missing recorded head was not named"
+        ;;
+    esac
+    assert_no_grep 'pr merge' "$case_dir/gh.log" \
+      "local-gate-head-$label: gh pr merge ran on an unvalidated head"
+  done
+  pass "the local checks gate refuses a head its local checks did not vouch for"
+}
+
+# An unknown checks gate value is a refusal, never a silent choice of gate.
+test_unreadable_checks_gate_refuses_merge() {
+  local case_dir rc head=efefefefefefefefefefefefefefefefefefefef
+  case_dir=$(make_case checks-gate-unknown)
+  add_gh_mocks "$case_dir" "$head"
+  printf 'sometimes\n' > "$case_dir/home/config/checks-gate"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/86 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "checks-gate-unknown: an unknown setting must refuse"
+  assert_grep 'expected one of: forge, local' "$case_dir/stderr" \
+    "checks-gate-unknown: the accepted values were not named"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "checks-gate-unknown: gh pr merge ran"
+  ! grep -q '^pr=' "$case_dir/state/task-x1.meta" \
+    || fail "checks-gate-unknown: pr= was recorded before the refusal"
+  pass "an unknown checks gate setting refuses the merge before recording anything"
+}
+
 # A draft cannot be merged, and neither can a pull request whose draft state the
 # forge did not report as a boolean; both refuse before any merge call.
 test_github_draft_or_unreadable_draft_state_refuses() {
@@ -3233,6 +3326,9 @@ test_untraversable_user_backend_config_directory_refuses_the_merge
 test_absent_user_backend_config_directory_and_backlog_still_merge
 test_backend_override_bypasses_unreadable_user_config
 test_github_red_checks_refuse_and_allow_red_waives_named
+test_local_checks_gate_merges_past_forge_checks
+test_local_checks_gate_binds_the_locally_validated_head
+test_unreadable_checks_gate_refuses_merge
 test_github_draft_or_unreadable_draft_state_refuses
 test_superseded_failed_check_run_no_longer_refuses
 test_check_runs_never_supersede_status_contexts

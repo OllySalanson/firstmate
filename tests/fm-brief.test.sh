@@ -410,6 +410,67 @@ test_no_mistakes_dod_wording() {
   pass "fm-brief.sh: no-mistakes DOD keeps its apostrophe prose and bans --yes outright"
 }
 
+# A home whose config/checks-gate says local gates landings on local checks: a
+# no-mistakes worker skips only the pipeline's forge ci step and reports when
+# the run passes, a direct-PR worker runs the project's checks before pushing,
+# and the ready report keeps its shape. local-only is unchanged, a home
+# without the file keeps the forge contract, and an unknown value stops the
+# scaffold.
+test_local_checks_gate_shapes_ship_briefs() {
+  local home forge_home brief out rc
+  home="$TMP_ROOT/checks-gate-home"
+  forge_home="$TMP_ROOT/checks-gate-forge-home"
+  write_registry "$home"
+  write_registry "$forge_home"
+  mkdir -p "$home/config"
+  printf 'local\n' > "$home/config/checks-gate"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" gate-nm some-proj --mode no-mistakes >/dev/null \
+    || fail "a no-mistakes brief failed under the local checks gate"
+  brief="$home/data/gate-nm/brief.md"
+  grep -qx 'Delivery contract: mode=no-mistakes' "$brief" \
+    || fail "the local checks gate changed the delivery contract line"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'Pass `--skip ci` on every `no-mistakes axi run` for this task, and skip nothing else.' "$brief" \
+    "the local no-mistakes brief does not skip the forge ci step"
+  assert_grep "When the run's outcome is passed, passed-with-skips, or passed-with-override, it has pushed your branch and opened the PR without waiting on forge CI" "$brief" \
+    "the local no-mistakes brief does not report on the run's outcome"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'Then append `done [at=<epoch>]: PR {url} checks green` and stop.' "$brief" \
+    "the local no-mistakes brief changed the ready report"
+  assert_no_grep "Only a drive call's return reports the green PR" "$brief" \
+    "the local no-mistakes brief still waits on a CI-ready return"
+  assert_no_grep 'After /no-mistakes reports CI green' "$brief" \
+    "the local no-mistakes brief still waits on forge CI"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" gate-direct some-proj --mode direct-PR >/dev/null \
+    || fail "a direct-PR brief failed under the local checks gate"
+  brief="$home/data/gate-direct/brief.md"
+  assert_grep 'Before you push, run every check the project defines' "$brief" \
+    "the local direct-PR brief does not run the project's checks before pushing"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'Then append `done [at=<epoch>]: PR {url}` to the status file and stop.' "$brief" \
+    "the local direct-PR brief changed the ready report"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" gate-local some-proj --mode local-only >/dev/null \
+    || fail "a local-only brief failed under the local checks gate"
+  assert_no_grep "checks gate is local" "$home/data/gate-local/brief.md" \
+    "the local checks gate changed a local-only brief"
+
+  FM_HOME="$forge_home" "$ROOT/bin/fm-brief.sh" gate-forge some-proj --mode no-mistakes >/dev/null \
+    || fail "a no-mistakes brief failed without a checks gate setting"
+  brief="$forge_home/data/gate-forge/brief.md"
+  assert_no_grep '--skip ci' "$brief" "a home without the setting skipped forge CI"
+  assert_grep 'After /no-mistakes reports CI green' "$brief" "a home without the setting stopped waiting on forge CI"
+
+  printf 'sometimes\n' > "$home/config/checks-gate"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" gate-bad some-proj --mode no-mistakes 2>&1); rc=$?
+  expect_code 1 "$rc" "an unknown checks gate must stop the scaffold"
+  assert_contains "$out" 'expected one of: forge, local' "the unknown checks gate refusal did not name the accepted values"
+  assert_absent "$home/data/gate-bad/brief.md" "an unknown checks gate left a brief behind"
+  pass "fm-brief.sh: the local checks gate skips forge CI and keeps every ready report's shape"
+}
+
 # The green-PR report must not depend on a status poll: `axi status` never
 # reports `checks-passed` while the ci step monitors the PR for merge, so a
 # worker told to wait on it for the next gate or outcome never learned its PR
@@ -1105,6 +1166,7 @@ test_delivery_flags_are_refused_where_they_do_not_apply
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
 test_no_mistakes_dod_green_detection
+test_local_checks_gate_shapes_ship_briefs
 test_pr_based_dod_requires_non_draft
 test_ask_user_escalation_format
 test_ship_project_memory_wording

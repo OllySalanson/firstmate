@@ -1971,7 +1971,10 @@ scout_report_lines() {
 
 BACKLOG_JSON=$(backlog_json) || { echo "fm-fleet-snapshot: backlog read failed" >&2; exit 1; }
 contribution_tasks_json() {
-  local meta id merge_authority
+  local meta id merge_authority checks_gate
+  # An unreadable setting projects as the forge gate, which never reads a
+  # contribution readier than its forge checks.
+  checks_gate=$(fm_checks_gate_read "$CONFIG" 2>/dev/null) || checks_gate=forge
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] && [ ! -L "$meta" ] || continue
     id=$(basename "$meta" .meta)
@@ -1981,7 +1984,8 @@ contribution_tasks_json() {
     fi
     jq -n --arg id "$id" --arg kind "$(meta_value "$meta" kind)" \
       --arg url "$(meta_value "$meta" pr)" --arg head "$(meta_value "$meta" pr_head)" \
-      --arg merge_authority "$merge_authority" '{id:$id,kind:$kind,pr:{url:$url,head:$head},merge_authority:$merge_authority}'
+      --arg merge_authority "$merge_authority" --arg checks_gate "$checks_gate" \
+      '{id:$id,kind:$kind,pr:{url:$url,head:$head},merge_authority:$merge_authority,checks_gate:$checks_gate}'
   done | jq -s .
 }
 

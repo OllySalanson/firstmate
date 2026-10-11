@@ -276,6 +276,30 @@ fm_pr_json_draft_state() {  # <pull-request-json>
   ' 2>/dev/null || true
 }
 
+# The one reading of a home's config/checks-gate, which docs/configuration.md
+# "Checks gate" owns. Prints "forge" when the file is absent or says forge and
+# "local" when it says local. Anything else, including an unreadable file,
+# prints nothing and fails naming the file, so each caller chooses its own
+# refusal instead of silently landing on either gate.
+fm_checks_gate_read() {  # <config-dir>
+  local file=$1/checks-gate value
+  if [ ! -e "$file" ] && [ ! -L "$file" ]; then
+    printf 'forge\n'
+    return 0
+  fi
+  if [ ! -f "$file" ] || [ ! -r "$file" ] || ! value=$(tr -d '[:space:]' <"$file" 2>/dev/null); then
+    printf 'error: %s must be a readable regular file holding one of: forge, local\n' "$file" >&2
+    return 1
+  fi
+  case "$value" in
+    forge|local) printf '%s\n' "$value" ;;
+    *)
+      printf 'error: %s holds "%s"; expected one of: forge, local\n' "$file" "$value" >&2
+      return 1
+      ;;
+  esac
+}
+
 fm_pr_file_mode() {
   if [ "$(uname)" = Darwin ]; then
     /usr/bin/stat -f %Lp "$1" 2>/dev/null

@@ -1751,6 +1751,56 @@ daemon shutting down"
   pass "a second failed step disqualifies the orphaned-monitor reclassification"
 }
 
+# Under a local checks gate the pipeline's completed local steps are the
+# checks, so a ci step still waiting on forge checks, or a run that failed only
+# at that step, reads ready; a ci step that is fixing code stays working, and a
+# home without the setting keeps the forge reading.
+test_local_checks_gate_does_not_wait_on_forge_ci() {
+  reset_fakes
+  local d out
+  d=$(new_case local-gate-ci)
+  make_repo_on_branch "$d/wt" fm/feat-local
+  make_fakebin "$d" >/dev/null
+  mkdir -p "$d/config"
+  printf 'local\n' > "$d/config/checks-gate"
+  fm_write_meta "$d/state/feat-local.meta" "window=fm:fm-feat-local" "worktree=$d/wt" "kind=ship"
+
+  FM_FAKE_AXI_STATUS="$(run_ci_monitoring fm/feat-local)"
+  FM_FAKE_CI_LOGS="CI checks running, waiting for results..."
+  out=$(FM_CONFIG_OVERRIDE="$d/config" run_crew_state "$d" feat-local)
+  assert_contains "$out" "state: done" "local gate: a ci step waiting on queued forge checks reads ready"
+  assert_contains "$out" "local checks green: PR ready for review" "local gate: the detail names the local checks"
+  assert_contains "$out" "https://github.com/o/r/pull/2" "local gate: the ready reading names the run's PR"
+  out=$(run_crew_state "$d" feat-local)
+  assert_contains "$out" "state: working" "forge gate: the same queued forge checks still read working"
+
+  FM_FAKE_AXI_STATUS="$(run_failed_ci_orphan fm/feat-local)"
+  FM_FAKE_CI_LOGS="CI checks running
+checks failed: 1 of 2 checks red
+ci monitor timed out"
+  out=$(FM_CONFIG_OVERRIDE="$d/config" run_crew_state "$d" feat-local)
+  assert_contains "$out" "state: done" "local gate: a run that failed only at the forge ci step reads ready"
+  assert_contains "$out" "local checks green: PR held for merge" "local gate: the held reading names the local checks"
+  out=$(run_crew_state "$d" feat-local)
+  assert_contains "$out" "state: failed" "forge gate: a red forge check keeps that run failed"
+
+  FM_FAKE_AXI_STATUS="$(run_failed_ci_orphan_second_failure fm/feat-local)"
+  out=$(FM_CONFIG_OVERRIDE="$d/config" run_crew_state "$d" feat-local)
+  assert_contains "$out" "state: failed" "local gate: a failed local step still fails the run"
+
+  FM_FAKE_AXI_STATUS="$(run_ci_fixing fm/feat-local)"
+  FM_FAKE_CI_LOGS="all CI checks passed - still monitoring until merged or closed"
+  out=$(FM_CONFIG_OVERRIDE="$d/config" run_crew_state "$d" feat-local)
+  assert_contains "$out" "state: working" "local gate: a ci step fixing code is not ready"
+
+  printf 'sometimes\n' > "$d/config/checks-gate"
+  FM_FAKE_AXI_STATUS="$(run_ci_monitoring fm/feat-local)"
+  FM_FAKE_CI_LOGS="CI checks running, waiting for results..."
+  out=$(FM_CONFIG_OVERRIDE="$d/config" run_crew_state "$d" feat-local 2>/dev/null)
+  assert_contains "$out" "state: working" "an unreadable checks gate reads as the forge gate"
+  pass "the local checks gate reads forge CI as advisory and keeps local failures and fixes"
+}
+
 # (e) cross-branch attribution: `axi status` returns ANOTHER branch's run (the
 # routine case once more than one crew validates the same underlying repo
 # concurrently - they share ONE no-mistakes repo registration), so the helper
@@ -5272,6 +5322,7 @@ test_ci_monitoring_green_then_rearm_stays_green
 test_ci_monitoring_green_before_log_tail_stays_green
 test_ci_monitoring_no_checks_yet_stays_working
 test_ci_monitoring_still_waiting_stays_working
+test_local_checks_gate_does_not_wait_on_forge_ci
 test_ci_monitoring_green_then_new_issue_stays_working
 test_ci_ready_done_log_relapse_stays_working
 test_ci_fixing_after_green_stays_working
