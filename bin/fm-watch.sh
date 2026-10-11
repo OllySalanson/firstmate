@@ -106,10 +106,10 @@
 #                          payload names what to check. These three kinds are
 #                          joined with `;` when more than one surfaces in a cycle
 #   check: memory-watchdog: <events>
-#                          the watchdog recorded room for deferred work, a
-#                          critical-line job stop, or a processor or connection
-#                          throttle step (bin/fm-memory-watchdog.sh poll owns
-#                          the text; each event surfaces once)
+#                          the watchdog recorded room for deferred work or a
+#                          memory job stop (bin/fm-memory-watchdog.sh poll owns
+#                          the text and which events surface; each surfaces
+#                          once, and a throttle step never does)
 #   check: rejected unauthenticated state checks: <paths>
 #                          unsafe state checks were refused without execution
 #   check: rejected unauthenticated PR poll retirement receipts: <paths>
@@ -1539,6 +1539,21 @@ clear_pause_tracking() {  # <window-key>
   clear_stale_hash_tracking "$key"
 }
 
+# Reset pause bookkeeping for a pane that went busy. A busy turn proves the
+# worker is alive, not that its declared wait ended: a parked worker re-arming
+# its own merge or CI watch goes busy for a moment and settles back onto the
+# same wait. While the status line still declares that wait, only the per-hash
+# half resets, so the declaration-scoped re-surface throttle keeps bounding it
+# and the settle does not take a fresh first sight; the loop-top reconciliation
+# clears the rest once the declaration is lifted.
+clear_pause_on_busy() {  # <window-key> <last-status-line>
+  if status_is_paused_or_captain_held "$2"; then
+    clear_stale_hash_tracking "$1"
+  else
+    clear_pause_tracking "$1"
+  fi
+}
+
 # Reconcile a declared pause or captain-held status with authoritative crew state.
 # After fm-crew-state has fallen back to stopped or unknown, paused classification is
 # recovered only for a confidently dead ordinary crew, or for a secondmate, whose
@@ -2913,11 +2928,12 @@ EOF
           clear_write_tracking "$key"
         fi
         # A busy pane normally means real work resumed, so stale pause bookkeeping
-        # is cleared - but not in the same poll the declared-pause cadence just
-        # recorded it, or the re-surface throttle it depends on would be erased and
-        # the pause would re-surface every poll instead of once per long cadence.
-        if [ "$paused_bound" -ne 0 ] && [ -e "$pf" ] && { [ "$n" -ge 2 ] || ! status_is_paused_or_captain_held "$(last_status_line "$STATE/$(window_to_task "$w" "$STATE").status")"; }; then
-          clear_pause_tracking "$key"
+        # is cleared (clear_pause_on_busy keeps a still-declared wait's throttle) -
+        # but not in the same poll the declared-pause cadence just recorded it, or
+        # the re-surface throttle it depends on would be erased and the pause would
+        # re-surface every poll instead of once per long cadence.
+        if [ "$paused_bound" -ne 0 ] && [ -e "$pf" ] && { [ "$n" -ge 2 ] || ! status_is_paused_or_captain_held "$last"; }; then
+          clear_pause_on_busy "$key" "$last"
         fi
       fi
     else
@@ -2948,7 +2964,7 @@ EOF
       elif [ "$paused_bound" -ne 0 ] && [ -e "$pf" ]; then
         # Same rule as the stable-hash branch: never clear pause bookkeeping the
         # declared-pause cadence recorded on this very poll.
-        clear_pause_tracking "$key"
+        clear_pause_on_busy "$key" "$last"
       fi
     fi
   done < <(recorded_windows)
