@@ -2228,7 +2228,9 @@ SH
       "$ROOT/bin/fm-config-push.sh" > "$first_out" 2>&1
   ) &
   first_pid=$!
-  for _ in $(seq 1 100); do
+  # A whole config push runs before the first pointer delivery, so allow it
+  # ten seconds on a loaded machine; the break keeps the common case fast.
+  for _ in $(seq 1 500); do
     [ -e "$entered" ] && break
     sleep 0.02
   done
