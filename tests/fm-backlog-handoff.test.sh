@@ -198,7 +198,7 @@ SH
 
 test_known_failure_restores_retry_after_reconciliation_race() {
   local home="$TMP_ROOT/reconcile-race-main" sub="$TMP_ROOT/reconcile-race-sub"
-  local basebin blockbin="$TMP_ROOT/reconcile-race-block" handoff i corr phase
+  local basebin blockbin="$TMP_ROOT/reconcile-race-block" handoff corr phase
   setup_homes "$home" "$sub"
   mkdir -p "$sub/data" "$blockbin"
   cat > "$home/data/backlog.md" <<'EOF'
@@ -229,13 +229,10 @@ SH
     "$ROOT/bin/fm-backlog-handoff.sh" design reconcile-race \
     > "$TMP_ROOT/reconcile-race.out" 2>&1 &
   handoff=$!
-  i=0
-  while [ ! -f "$TMP_ROOT/reconcile-race.entered" ]; do
-    kill -0 "$handoff" 2>/dev/null || fail "reconciliation-race handoff exited before backend delivery"
-    i=$((i + 1))
-    [ "$i" -le 250 ] || fail "reconciliation-race handoff never reached backend delivery"
-    sleep 0.02
-  done
+  fm_wait_for_path "$TMP_ROOT/reconcile-race.entered" "$handoff" || {
+    touch "$TMP_ROOT/reconcile-race.release"
+    fail "reconciliation-race handoff never reached backend delivery: $(cat "$TMP_ROOT/reconcile-race.out")"
+  }
   corr=$(cut -d: -f2- "$home/state/.backlog-handoff-design.wake-pending")
   FM_PENDING_REPLY_NOW=9999999999 bash -c '
     . "$1"
@@ -545,7 +542,7 @@ SH
 
 test_concurrent_local_handoffs_serialize_move_and_wake() {
   local home="$TMP_ROOT/concurrent-main" sub="$TMP_ROOT/concurrent-sub"
-  local basebin blockbin="$TMP_ROOT/concurrent-blockbin" first second i wake_count
+  local basebin blockbin="$TMP_ROOT/concurrent-blockbin" first second wake_count
   setup_homes "$home" "$sub"
   mkdir -p "$sub/data" "$blockbin"
   printf '## Queued\n\n## Done\n' > "$sub/data/backlog.md"
@@ -579,13 +576,10 @@ SH
     FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/concurrent-fake/pane.txt" \
     "$ROOT/bin/fm-backlog-handoff.sh" design concurrent-a > "$TMP_ROOT/concurrent-a.out" 2>&1 &
   first=$!
-  i=0
-  while [ ! -f "$TMP_ROOT/concurrent.entered" ]; do
-    kill -0 "$first" 2>/dev/null || fail "first concurrent handoff exited before its blocked wake"
-    i=$((i + 1))
-    [ "$i" -le 250 ] || fail "first concurrent handoff never reached its receiver wake"
-    sleep 0.02
-  done
+  fm_wait_for_path "$TMP_ROOT/concurrent.entered" "$first" || {
+    touch "$TMP_ROOT/concurrent.release"
+    fail "first concurrent handoff never reached its receiver wake: $(cat "$TMP_ROOT/concurrent-a.out")"
+  }
   cat > "$home/data/backlog.md" <<'EOF'
 ## Queued
 - [ ] concurrent-b - second routed item (repo: alpha)
@@ -618,7 +612,7 @@ EOF
 
 test_local_teardown_waits_for_handoff_wake() {
   local home="$TMP_ROOT/teardown-race-main" sub="$TMP_ROOT/teardown-race-sub"
-  local basebin blockbin="$TMP_ROOT/teardown-race-blockbin" handoff teardown i
+  local basebin blockbin="$TMP_ROOT/teardown-race-blockbin" handoff teardown
   setup_homes "$home" "$sub"
   printf 'project=%s\n' "$ROOT" >> "$home/state/design.meta"
   mkdir -p "$sub/data" "$blockbin"
@@ -649,13 +643,10 @@ SH
     FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/teardown-race-fake/pane.txt" \
     "$ROOT/bin/fm-backlog-handoff.sh" design teardown-race > "$TMP_ROOT/teardown-race-handoff.out" 2>&1 &
   handoff=$!
-  i=0
-  while [ ! -f "$TMP_ROOT/teardown-race.entered" ]; do
-    kill -0 "$handoff" 2>/dev/null || fail "teardown-race handoff exited before its blocked wake"
-    i=$((i + 1))
-    [ "$i" -le 250 ] || fail "teardown-race handoff never reached its receiver wake"
-    sleep 0.02
-  done
+  fm_wait_for_path "$TMP_ROOT/teardown-race.entered" "$handoff" || {
+    touch "$TMP_ROOT/teardown-race.release"
+    fail "teardown-race handoff never reached its receiver wake: $(cat "$TMP_ROOT/teardown-race-handoff.out")"
+  }
   PATH="$basebin:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
     FM_FAKE_TMUX_WINDOW='firstmate:fm-design' \
     FM_FAKE_TMUX_LOG="$TMP_ROOT/teardown-race-tmux.log" \

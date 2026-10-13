@@ -183,8 +183,48 @@ fm_test_reap_procevent_homes() {
 FM_TEST_STUB_MAX_BLOCK_SECONDS=${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}
 export FM_TEST_STUB_MAX_BLOCK_SECONDS
 
+# fm_test_reap_background_jobs: stop every background job this shell started
+# that is still running when it exits. A case that fails between starting a
+# process with `&` and reaping it (a watcher, a blocked handoff, a lock holder)
+# would otherwise leave that process behind, still holding the suite's inherited
+# stdout and stderr, so a caller reading the suite through a pipe waits on it
+# forever. It only signals this shell's own jobs, never a process found by name.
+# TERM first, so a watcher still runs its EXIT cleanup; KILL whatever is left
+# once FM_TEST_JOB_REAP_SECS (default 10) of wall clock pass.
+FM_TEST_JOB_REAP_SECS=${FM_TEST_JOB_REAP_SECS:-10}
+
+fm_test_reap_background_jobs() {
+  local pids pid deadline live
+  pids=$(jobs -pr 2>/dev/null) || return 0
+  [ -n "$pids" ] || return 0
+  for pid in $pids; do
+    printf 'fm_test_cleanup: stopping background job %s left running at exit\n' "$pid" >&2
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  deadline=$((SECONDS + FM_TEST_JOB_REAP_SECS))
+  while :; do
+    live=
+    for pid in $pids; do
+      kill -0 "$pid" 2>/dev/null && live="$live $pid"
+    done
+    [ -n "$live" ] || break
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      for pid in $live; do
+        printf 'fm_test_cleanup: background job %s survived TERM; sending KILL\n' "$pid" >&2
+        kill -KILL "$pid" 2>/dev/null || true
+      done
+      break
+    fi
+    sleep 0.05
+  done
+  for pid in $pids; do
+    wait "$pid" 2>/dev/null || true
+  done
+}
+
 fm_test_cleanup() {
   local d
+  fm_test_reap_background_jobs
   fm_test_reap_procevent_homes
   fm_test_tmux_isolation_cleanup
   for d in "${FM_TEST_CLEANUP_DIRS[@]:-}"; do
@@ -352,6 +392,69 @@ fm_live_gate() {
     exit 0
   done
 
+  return 0
+}
+
+# --- host-tool gate ---------------------------------------------------------
+#
+# fm_require_host_tool <purpose> <tool> [alternative ...]
+#
+# Opens a suite that cannot run at all without a general host tool firstmate
+# itself never depends on (ruby to parse YAML, a C compiler to build a fixture
+# binary). It returns 0 when any named tool is on PATH, and otherwise ends the
+# script with one runner-readable line, so bin/fm-test-run.sh records a gate skip
+# naming the gap instead of a failure this host cannot fix:
+#
+#   skip: host tool absent: <tool>[ or <alternative> ...] (needed to <purpose>)
+#
+# CI images provide these tools, so under CI=true an absent tool fails instead:
+# a skip there would quietly retire the contract the suite holds.
+# A single case inside a larger suite reports its own `skip - <reason>` line and
+# returns rather than calling this, so the rest of the suite still runs.
+fm_require_host_tool() {
+  local purpose=$1 tool names
+  shift
+  [ "$#" -gt 0 ] || fail "fm_require_host_tool: at least one tool is required"
+  for tool in "$@"; do
+    command -v "$tool" >/dev/null 2>&1 && return 0
+  done
+  names="$*"
+  names=${names// / or }
+  if [ "${CI:-}" = true ]; then
+    fail "host tool absent on CI: $names (needed to $purpose)"
+  fi
+  printf 'skip: host tool absent: %s (needed to %s)\n' "$names" "$purpose"
+  exit 0
+}
+
+# --- progress waits ---------------------------------------------------------
+#
+# fm_wait_for_path <path> <pid>
+#
+# Waits for a background process to reach a point a case stages, signalled by
+# <path> appearing (a blocked fake touching its "entered" file, a lock holder's
+# lock). Returns 0 once <path> exists, 1 as soon as <pid> has exited without
+# creating it, and 124 once FM_TEST_HANG_SECS (default 120) of wall clock pass.
+#
+# A few seconds of polling is the wrong bound for such a wait: on a loaded host
+# the process legitimately takes longer to get there, and the case fails though
+# nothing is wrong. The failures worth reporting are the process exiting before
+# it arrives, which this sees at once, and a genuine hang, which only the ceiling
+# catches. The caller still owns <pid>: on a non-zero return it releases or kills
+# it before failing, so a blocked fixture never outlives the suite.
+FM_TEST_HANG_SECS=${FM_TEST_HANG_SECS:-120}
+
+fm_wait_for_path() {
+  local path=$1 pid=$2 deadline
+  deadline=$((SECONDS + FM_TEST_HANG_SECS))
+  while [ ! -e "$path" ]; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      [ -e "$path" ] && return 0
+      return 1
+    fi
+    [ "$SECONDS" -lt "$deadline" ] || return 124
+    sleep 0.02
+  done
   return 0
 }
 

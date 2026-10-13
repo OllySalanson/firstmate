@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Behavior tests for tests/lib.sh's shared fixture-tempdir helper
-# (fm_test_tmproot / fm_test_cleanup / fm_test_reap_orphans).
+# (fm_test_tmproot / fm_test_cleanup / fm_test_reap_orphans), and the
+# background-job reaping fm_test_cleanup does at exit.
 #
 # The near-universal call pattern across this suite is
 # `TMP_ROOT=$(fm_test_tmproot prefix)`, which forks a subshell to capture the
@@ -164,9 +165,41 @@ test_orphan_sweep_reaps_read_only_package_tree() {
   pass "the orphan sweep reaps read-only package fixtures"
 }
 
+# A case that fails after starting a background process and before reaping it
+# must not leave that process holding the suite's output: a caller reading the
+# suite through a pipe would otherwise wait on it. The child below starts two
+# such jobs, one ignoring TERM, and then fails; the parent reads the child's
+# whole output through a command substitution, which only returns once every
+# holder of that pipe has exited.
+test_failed_case_background_jobs_released_at_exit() {
+  local out start elapsed pid
+  start=$SECONDS
+  out=$(FM_TEST_JOB_REAP_SECS=1 bash -c '
+    . "$1"
+    sleep 60 &
+    printf "job:%s\n" "$!"
+    ( trap "" TERM; sleep 60 ) &
+    printf "job:%s\n" "$!"
+    fail "a case failed before reaping its background jobs"
+  ' _ "$LIB" 2>&1)
+  elapsed=$((SECONDS - start))
+  [ "$elapsed" -lt 30 ] \
+    || fail "a failed case's background jobs held its output for ${elapsed}s"
+  assert_contains "$out" "not ok - a case failed before reaping its background jobs" \
+    "the child did not reach its failing case"
+  assert_contains "$out" "survived TERM; sending KILL" \
+    "a job ignoring TERM was not escalated to KILL"
+  for pid in $(printf '%s\n' "$out" | sed -n 's/^job://p'); do
+    ! kill -0 "$pid" 2>/dev/null \
+      || { kill -KILL "$pid" 2>/dev/null; fail "background job $pid survived its owning suite's exit"; }
+  done
+  pass "fm_test_cleanup stops background jobs a failed case left running"
+}
+
 test_fixture_root_gone_after_normal_exit
 test_fixture_root_gone_after_sigterm
 test_cleanup_registry_resists_precreation
 test_fixture_registration_failure_rolls_back_root
 test_orphan_sweep_respects_fixture_ownership
 test_orphan_sweep_reaps_read_only_package_tree
+test_failed_case_background_jobs_released_at_exit

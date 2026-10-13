@@ -26,6 +26,7 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+fm_require_host_tool "build the fake Cursor process" cc gcc
 TMP_ROOT=$(fm_test_tmproot fm-cursor-primary)
 fm_git_identity fmtest fmtest@example.invalid
 
@@ -33,8 +34,7 @@ FAKEBIN=$(fm_fakebin "$TMP_ROOT/fakebin")
 # Use a real executable whose own canonical basename is cursor-agent. A symlink
 # to bash is not sufficient on Linux: /proc resolves it to bash, so the real
 # Cursor ancestry classifier correctly rejects that process as an impostor.
-CC_BIN=$(command -v cc 2>/dev/null || command -v gcc 2>/dev/null || true)
-[ -n "$CC_BIN" ] || fail "a C compiler is required to build the fake Cursor process"
+CC_BIN=$(command -v cc 2>/dev/null || command -v gcc)
 cat > "$TMP_ROOT/fake-cursor.c" <<'C'
 #include <errno.h>
 #include <string.h>
