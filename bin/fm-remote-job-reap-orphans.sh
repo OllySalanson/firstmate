@@ -8,8 +8,9 @@
 # Firstmate code root: the account's own checkout under the LaunchAgent, a
 # remote secondmate's checkout, a no-mistakes gate worktree, a pooled task
 # worktree, or a test fixture root. When that root is pruned while the worker is
-# running, the worker is reparented to init and, on older builds, keeps polling
-# and logging indefinitely. Current workers stop themselves once their root is
+# running, the worker is reparented to init (or a subreaper such as WSL's
+# per-session /init relay) and, on older builds, keeps polling and logging
+# indefinitely. Current workers stop themselves once their root is
 # gone (bin/fm-remote-job-worker.sh); this sweep is the belt-and-suspenders pass
 # that clears workers already orphaned that way, including ones started before
 # self-termination shipped.

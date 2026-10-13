@@ -308,6 +308,21 @@ EOF
   pass "status_key_closing_verb separates resolution, durable transfer, and still-open"
 }
 
+# A NUL byte elsewhere in the log (an escape-interpreting echo once wrote
+# C:\Users that way) must not hide the closing line from the candidate scan.
+test_closing_verb_survives_a_nul_byte_in_the_log() {
+  local dir f err
+  dir=$(case_dir closing-verb-nul)
+  f="$dir/a.status"
+  err="$dir/err"
+  printf 'needs-decision [key=path]: save to C:\000sers\\ollys\000work?\n' > "$f"
+  printf 'resolved [key=path]: answered: yes\n' >> "$f"
+  [ "$(status_key_closing_verb "$f" path 2> "$err")" = resolved ] \
+    || fail "a NUL byte in the log hid the resolve line: '$(status_key_closing_verb "$f" path 2>/dev/null)'"
+  [ ! -s "$err" ] || fail "status_key_closing_verb warned on a NUL byte: $(cat "$err")"
+  pass "status_key_closing_verb reads a log holding a NUL byte without loss or warning"
+}
+
 # The reported verb is the LAST transition, read through the same fold rule as
 # everything else: the colon-first key position counts, a re-opened key reports
 # open again, and a prose mention is never a transition.
@@ -337,6 +352,7 @@ EOF
 }
 
 test_closing_verb_separates_resolution_from_durable_transfer
+test_closing_verb_survives_a_nul_byte_in_the_log
 test_closing_verb_tracks_the_last_transition_in_both_positions
 
 # The per-key read pre-selects candidate lines by their leading verb before the

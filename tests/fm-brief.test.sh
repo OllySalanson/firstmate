@@ -914,7 +914,7 @@ test_pause_verb_override_renders_all_brief_scaffolds() {
     # may not carry an unevaluated substitution that a file-write tool would
     # copy through verbatim.
     # shellcheck disable=SC2016 # Match literal backticks in the generated interface.
-    append=$(sed -n '/`echo "{state}/s/.*`\(echo .*\)`.*/\1/p' "$brief")
+    append=$(sed -n '/`printf [^`]*"{state}/s/.*`\(printf [^`]*\)`.*/\1/p' "$brief")
     now=$(date +%s)
     append=${append//\{state\}/done}
     append=${append//\{one short line\}/test event}
@@ -939,7 +939,7 @@ test_pause_verb_override_renders_all_brief_scaffolds() {
     while IFS= read -r template; do
       [ -n "$template" ] || continue
       case "$template" in
-        'echo "'*) template=${template#echo \"}; template=${template%%\" >>*} ;;
+        "printf '%s\\n' \""*) template=${template#*\"}; template=${template%%\" >>*} ;;
       esac
       case "$template" in
         *"\$("*) fail "$kind signal embeds an unevaluated command: $template" ;;
@@ -1096,6 +1096,37 @@ test_worker_role_scope() {
   pass "fm-brief: scaffolds leave the worker role scope to the launch boundary and keep the secondmate contract"
 }
 
+# A worker's status line often carries a Windows path. The generated append
+# must write it byte for byte under every shell a worker may run it in: an
+# escape-interpreting echo (zsh, dash) once turned C:\Users into a NUL byte in
+# the status log, which every later wake drain then warned about.
+test_status_append_writes_windows_path_backslashes_literally() {
+  local home brief append cmd sh_name status expected text
+  home="$TMP_ROOT/windows-path-home"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" windows-path some-proj --mode no-mistakes >/dev/null \
+    || fail "ship scaffold failed"
+  brief="$home/data/windows-path/brief.md"
+  # shellcheck disable=SC2016 # Match literal backticks in the generated brief.
+  append=$(sed -n '/`printf [^`]*"{state}/s/.*`\(printf [^`]*\)`.*/\1/p' "$brief" | head -1)
+  [ -n "$append" ] || fail "the brief carries no status-append command"
+  text='saved C:\Users\ollys\0work\new\temp.txt'
+  expected="done [at=1790000000]: $text"
+  status="$home/state/windows-path.status"
+  mkdir -p "$home/state"
+  for sh_name in sh bash zsh; do
+    command -v "$sh_name" >/dev/null 2>&1 || continue
+    cmd=${append//\{state\}/done}
+    cmd=${cmd//<epoch>/1790000000}
+    cmd=${cmd//\{one short line\}/"$text"}
+    rm -f "$status"
+    "$sh_name" -c "$cmd" || fail "$sh_name could not run the status-append command"
+    [ "$(LC_ALL=C tr -d '\000' < "$status" | wc -c)" -eq "$(wc -c < "$status")" ] \
+      || fail "$sh_name wrote a NUL byte into the status log"
+    assert_equals "$expected" "$(cat "$status")" "$sh_name status line"
+  done
+  pass "the status-append command writes a Windows path literally under every installed shell"
+}
+
 # A home can carry standing worker instructions in its gitignored
 # config/brief-include.md. The include must land last on ship and scout
 # scaffolds, stay out of charters, change nothing when absent or blank, and stop
@@ -1184,3 +1215,4 @@ test_scout_and_secondmate_load_decision_hold_policy
 test_scout_and_secondmate_scaffold
 test_scout_lavish_line_follows_presentation_floor
 test_home_brief_include_is_appended_last
+test_status_append_writes_windows_path_backslashes_literally
