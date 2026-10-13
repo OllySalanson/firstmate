@@ -1,0 +1,2 @@
+skip: host tool absent: cc or gcc (needed to build the fake Cursor process)
+exit= elapsed=0s

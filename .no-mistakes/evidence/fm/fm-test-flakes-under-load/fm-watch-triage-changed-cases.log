@@ -1,0 +1,14 @@
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 1342516.1791862613.5U0UWG
+ok - queue revalidation, proactive output, and marker commit serialize with drain
+/home/ollys/.no-mistakes/worktrees/2c249179ad74/01M4SMNWA4MQRQ8X194V2SG8SX/bin/fm-push-transition-lib.sh: line 96: echo: write error: Broken pipe
+/home/ollys/.no-mistakes/worktrees/2c249179ad74/01M4SMNWA4MQRQ8X194V2SG8SX/tests/wake-helpers.sh: line 314: 1347911 Killed                  PATH="$dir/fakebin:$PATH" FM_HOME="$dir" FM_PROCEVENT_CLAIM_ROOT="$dir/claims" FM_CREW_STATE_BIN="$dir/fakebin/fm-crew-state.sh" FM_POLL=0.2 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out"
+/home/ollys/.no-mistakes/worktrees/2c249179ad74/01M4SMNWA4MQRQ8X194V2SG8SX/tests/wake-helpers.sh: line 314: 1350726 Killed                  PATH="$dir/fakebin:$PATH" FM_HOME="$dir" FM_PROCEVENT_CLAIM_ROOT="$dir/claims" FM_CREW_STATE_BIN="$dir/fakebin/fm-crew-state.sh" FM_POLL=0.2 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out"
+ok - surfacing failures replay until post-handling acknowledgement
+ok - captain-relevant signal is surfaced (queue + exit) and marked surfaced
+ok - heartbeat backstop fail-safe surfaces a captain-relevant status the per-wake path missed
+ok - with .afk present the watcher reverts to one-shot so the daemon owns triage (no double-triage)
+ok - provably-working non-terminal stale is absorbed on first sight, then wedge-escalated past the threshold
+ok - a busy worker with a stable pane hash still escalates once its completed-turn age reaches the bound
+ok - a declared wait whose until time has passed is rechecked at once, then held to the cadence
+ok - absorbed paused and captain-held replacements each start their own re-surface cadence
+exit=0 elapsed=57s

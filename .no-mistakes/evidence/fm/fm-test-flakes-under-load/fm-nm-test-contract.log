@@ -1,0 +1,2 @@
+skip: host tool absent: ruby (needed to parse .no-mistakes.yaml as YAML)
+exit= elapsed=0s

@@ -1,0 +1,11 @@
+### base 63f4674: suite fails with a background job alive, output read through a pipe (timeout 30s)
+started background job 1314657
+not ok - case failed before reaping its background job
+### pipe reader rc=124 after 30s (HUNG: reader still blocked when timeout fired)
+
+### change fe3e427: suite fails with a background job alive, output read through a pipe (timeout 30s)
+started background job 1336375
+not ok - case failed before reaping its background job
+fm_test_cleanup: stopping background job 1336375 left running at exit
+### pipe reader rc=0 after 0s 
+
