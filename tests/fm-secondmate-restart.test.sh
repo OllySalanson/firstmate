@@ -487,7 +487,17 @@ case "${rargs[1]:-}" in
     case "${FM_FAKE_SSH_MODE:-ok}" in
       slow-relaunch)
         : > "$FM_FAKE_DIR/remote-relaunch-start"
-        /bin/sleep 2
+        if [ -n "${FM_FAKE_SLOW_RELAUNCH_UNTIL:-}" ]; then
+          # Hold the relaunch open until the marker appears (bounded), so an
+          # overlap a test asserts never depends on how loaded the machine is.
+          i=0
+          while [ ! -e "$FM_FAKE_SLOW_RELAUNCH_UNTIL" ] && [ "$i" -lt 300 ]; do
+            /bin/sleep 0.1
+            i=$((i + 1))
+          done
+        else
+          /bin/sleep 2
+        fi
         : > "$FM_FAKE_DIR/remote-relaunch-end"
         ;;
     esac
@@ -673,7 +683,8 @@ test_relaunches_do_not_block_persist_polling() {
   export FM_FAKE_ANSWER_STATUS="$dir/home/state/sm1.status"
   arm_answer "$dir" sm2
 
-  out=$(FM_TEST_PERSIST_WAIT=5 run_restart "$dir" sm1 sm2); rc=$?
+  out=$(FM_FAKE_SLOW_RELAUNCH_UNTIL="$dir/fake/local-relaunch-during-remote" \
+    FM_TEST_PERSIST_WAIT=5 run_restart "$dir" sm1 sm2); rc=$?
   unset FM_FAKE_ANSWER_STATUS
 
   expect_code 0 "$rc" "both confirmed mates should restart independently"$'\n'"$out"
