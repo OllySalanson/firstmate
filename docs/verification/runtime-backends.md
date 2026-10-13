@@ -445,6 +445,30 @@ ok - tmux: after a machine restart, relaunch reclaims a task whose window is gon
 The tmux facts the proof rests on, observed there: `display-message -p '#{pid}'` with no client and no target answers the pid of the server the calling process addresses; a pane keeps its `#{pane_id}` through a window rename and through `join-pane`, so a renamed window's pane, or a pane joined into another window, is still found in `list-panes -a -F '#{pane_id}'`; and tmux renames its server's kernel `comm` to `tmux: server`, so the start time is parsed from after the final `)` of `/proc/<pid>/stat` and the process name is never part of the server's identity.
 The restart case is the one that motivated the proof, and it is non-vacuous: the same relaunch test run against the previous code fails with that code's refusal, `tmux absence cannot be proven from a task record`.
 
+## Launch brief off the command line
+
+Verified 2026-10-13 on Claude Code 2.1.296 (Linux, WSL2).
+`bin/fm-spawn.sh` launches every harness with only a typed pointer to the brief file, and Claude's task-worker trust statement through `--append-system-prompt-file`, so no brief text reaches `/proc/<pid>/cmdline`, where any `pkill -f` or `pgrep -f` pattern drawn from brief text would select every worker.
+The portable regression is `test_launch_keeps_brief_text_off_agent_command_line` in `tests/fm-spawn-dispatch-profile.test.sh`, with the same `fm_test_assert_brief_off_argv` check in the omp, agy, and muse suites; against the previous inline-brief launch it fails with `claude worker: the brief text reached the agent's command line`.
+
+A real Claude worker launched in the production shape on a private tmux socket, with `--model haiku`, a brief file carrying the marker `LIVESENTINEL_chrome-devtools-axi_headless_localhost` and the instruction to write `ACKNOWLEDGED` to a scratch `out.txt`:
+
+```sh
+claude --dangerously-skip-permissions --settings '...' \
+  --append-system-prompt-file "$PWD/bin/fm-worker-trust-prompt.txt" --model haiku \
+  "$(printf '%s' "Read the brief at $S/live/launch-brief.md and follow it exactly." | bin/fm-operational-input.sh encode launch-brief)"
+```
+
+```
+out: ACKNOWLEDGED
+[4112107] claude --dangerously-skip-permissions --settings {...} --append-system-prompt-file .../bin/fm-worker-trust-prompt.txt --model haiku FIRSTMATE_OP: v1 launch-brief: Read the brief at .../live/launch-brief.md and follow it exactly.
+0
+```
+
+The last line is the count of `LIVESENTINEL` occurrences in the worker's own command line.
+The worker read the pointed-to file with its Read tool and followed it, so the brief still reaches the agent as first-party instructions.
+The other harnesses were not installed on that machine; their launch shapes are pinned by the portable regression only.
+
 ## Claude workspace trust
 
 Verified 2026-09-03 on Claude Code 2.1.259.

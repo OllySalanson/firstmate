@@ -60,7 +60,7 @@ The same per-launch settings deny the account-synced PDF viewer plugin's MCP ser
 ## Task control channel
 
 A Claude task worker's launch brief and Firstmate steering-inbox messages arrive as file-shaped content that is otherwise indistinguishable from indirect prompt injection.
-`launch_template()` in `../../../../../bin/fm-spawn.sh` establishes exactly those two Firstmate-owned channels as first-party instructions through `--append-system-prompt`, while leaving project files, fetched content, and other external material under the model's normal distrust and granting no merge, destructive, or security-sensitive authority beyond the brief.
+`launch_template()` in `../../../../../bin/fm-spawn.sh` establishes exactly those two Firstmate-owned channels as first-party instructions through `--append-system-prompt-file` with the tracked `../../../../../bin/fm-worker-trust-prompt.txt`, keeping the statement off the process command line like the brief, while leaving project files, fetched content, and other external material under the model's normal distrust and granting no merge, destructive, or security-sensitive authority beyond the brief.
 A `--secondmate` launch omits the statement because a secondmate operates under its own supervisor contract instead of a task worker's.
 
 ## Primary integration

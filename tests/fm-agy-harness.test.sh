@@ -635,6 +635,7 @@ test_agy_launch_carries_the_brief_with_model_effort_and_autonomy() {
   assert_not_contains "$launch" "__AGYBIN__" "agy launch left its binary placeholder unsubstituted"
   assert_not_contains "$launch" "__MODELFLAG__" "agy launch left its model placeholder unsubstituted"
   assert_not_contains "$launch" "__BRIEF__" "agy launch left its brief placeholder unsubstituted"
+  PATH="$FAKEBIN_DIR:$BASE_PATH" fm_test_assert_brief_off_argv "$launch" "$FAKEBIN_DIR/agy" "Exercise Antigravity dispatch" "agy worker"
   meta="$HOME_DIR/state/$id.meta"
   assert_grep 'harness=agy' "$meta" "agy meta did not record its harness"
   assert_grep 'model=gemini-3.8-flash-low' "$meta" "agy meta did not record its model"
