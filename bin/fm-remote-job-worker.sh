@@ -29,8 +29,9 @@
 # loop and the Linux restart supervisor stop instead of polling forever
 # reparented to init or a subreaper. FM_REMOTE_JOB_ORPHAN_GRACE_SECONDS is how
 # long the root must stay missing before that counts, so an ordinary transient
-# never stops a healthy worker. The supervisor additionally bounds how many times it restarts
-# a failing child, whether or not the failures are immediate: it backs off
+# never stops a healthy worker. The supervisor additionally bounds how many
+# times it restarts a failing child, whether or not the failures are
+# immediate: it backs off
 # between immediate failures up to
 # FM_REMOTE_JOB_SUPERVISOR_MAX_BACKOFF_SECONDS and gives up after
 # FM_REMOTE_JOB_SUPERVISOR_MAX_RESTARTS failed children in total, since a
