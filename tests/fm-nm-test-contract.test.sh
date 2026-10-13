@@ -5,11 +5,10 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+fm_require_host_tool "parse .no-mistakes.yaml as YAML" ruby
 NM="$ROOT/.no-mistakes.yaml"
 
 test_nm_has_no_deterministic_test_command() {
-  command -v ruby >/dev/null 2>&1 \
-    || fail "ruby is required to parse .no-mistakes.yaml for this contract"
   local val
   val=$(ruby -ryaml -e '
 doc = YAML.load_file(ARGV[0]) || {}
