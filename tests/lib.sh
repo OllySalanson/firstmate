@@ -173,6 +173,32 @@ fm_test_reap_procevent_homes() {
   rm -f "$FM_TEST_PROCEVENT_REGISTRY"
 }
 
+# --- orphan reparenting -----------------------------------------------------
+#
+# fm_test_is_orphaned <pid> is true when <pid> has been reparented to an orphan
+# reaper after the process that launched it exited. The kernel hands an orphan
+# to its nearest living ancestor that is a child subreaper
+# (PR_SET_CHILD_SUBREAPER) and only otherwise to init, so the adopter is not
+# always pid 1: `systemd --user` adopts orphans below it, and WSL hands them to
+# a per-session `/init` relay. Whichever reaper adopts a fixture this suite
+# launched, it was an ancestor of the launcher, so it is pid 1 or a strict
+# ancestor of this shell. A still-attached process's parent is its launcher,
+# which sits below this shell and can never be either, so the test needs no
+# reaper names, pids, or platform cases.
+fm_test_is_orphaned() {  # <pid>
+  local parent walk=$$ i=0
+  parent=$(ps -o ppid= -p "$1" 2>/dev/null | tr -d '[:space:]')
+  case "$parent" in '' | *[!0-9]* | 0) return 1 ;; esac
+  [ "$parent" = 1 ] && return 0
+  while [ "$i" -lt 64 ]; do
+    walk=$(ps -o ppid= -p "$walk" 2>/dev/null | tr -d '[:space:]')
+    case "$walk" in '' | *[!0-9]* | 0 | 1) return 1 ;; esac
+    [ "$walk" = "$parent" ] && return 0
+    i=$((i + 1))
+  done
+  return 1
+}
+
 # Ceiling on how long a fixture's blocking stub may keep polling. A stub that
 # waits for a trigger file by re-running `sleep` is a high-frequency source of
 # process spawns, and one that outlives its test - because the test was killed

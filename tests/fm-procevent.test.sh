@@ -3689,7 +3689,7 @@ pass "a detected ambiguous reused-PID group is not signalled"
 # --- an accidentally orphaned runner is bounded by its owner ----------------
 #
 # Reproduces the shape that wedged a host: a listener detached into its own
-# process group, reparented to init when its session ended, and left running for
+# process group, reparented to an orphan reaper when its session ended, and left running for
 # a day with its blocking child - and everything that child spawned - still
 # executing. The cost was not the runner itself but the process churn under it,
 # which is why this asserts the whole descendant tree stops, not just the leader.
@@ -3806,9 +3806,8 @@ ORPHAN_DESCENDANT=$(cat "$TMP_ROOT/orphan-dead.descendant")
 
 # The reproduction condition itself: the listener is already an orphan in the
 # kernel's sense before anything is asserted about reaping it.
-orphan_ppid=$(ps -o ppid= -p "$ORPHAN_PID" 2>/dev/null | tr -d '[:space:]')
-[ "$orphan_ppid" = 1 ] \
-  || fail "the listener under test was not reparented away from its session (ppid $orphan_ppid)"
+fm_test_is_orphaned "$ORPHAN_PID" \
+  || fail "the listener under test was not reparented away from its session (ppid $(ps -o ppid= -p "$ORPHAN_PID" 2>/dev/null | tr -d '[:space:]'))"
 kill -0 -"$ORPHAN_PID" 2>/dev/null \
   || fail "the listener's process group was not running"
 kill -0 "$ORPHAN_DESCENDANT" 2>/dev/null \

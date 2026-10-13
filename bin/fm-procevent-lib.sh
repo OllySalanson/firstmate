@@ -106,9 +106,9 @@ fm_procevent_any_registered() {
 # --- owning-session lease ---------------------------------------------------
 # A runner is detached into its own process group so it survives the turn that
 # started it. That is what makes a persistent source work, and on its own it is
-# also what lets a runner outlive its whole home: once reparented to init,
-# nothing bounds its lifetime, so its blocking child - and everything that child
-# spawns - can keep running indefinitely.
+# also what lets a runner outlive its whole home: once reparented to init or a
+# subreaper, nothing bounds its lifetime, so its blocking child - and everything
+# that child spawns - can keep running indefinitely.
 #
 # The bound is a lease on the OWNING STATE ROOT. Owner-presence operations
 # refresh it, an attached public start keeps it fresh while its caller remains
