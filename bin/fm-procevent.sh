@@ -189,11 +189,12 @@
 # for a home that is GONE. Detaching a runner into its own
 # process group is what lets a persistent source outlive the turn that armed it,
 # and with nothing else it is also what lets a runner outlive its whole home:
-# reparented to init, it keeps its blocking child - and everything that child
-# spawns - running with nobody left to reap it. So every runner starts a small
-# guard beside it, in its own separate process group, which re-reads the owning
-# state root's lease on a bounded cadence and stops the runner's whole process
-# group once that lease can no longer be proved fresh. Owner-presence operations
+# reparented to init or a subreaper, it keeps its blocking child - and
+# everything that child spawns - running with nobody left to reap it. So every
+# runner starts a small guard beside it, in its own separate process group,
+# which re-reads the owning state root's lease on a bounded cadence and stops
+# the runner's whole process group once that lease can no longer be proved
+# fresh. Owner-presence operations
 # refresh the lease, an attached public start keeps it fresh while its caller
 # remains attached, and the watcher's reconcile cycle keeps it fresh in a live
 # home. A runner exports the inherited FM_PROCEVENT_IN_RUNNER marker and every
