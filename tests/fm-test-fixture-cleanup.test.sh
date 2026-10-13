@@ -178,7 +178,7 @@ test_failed_case_background_jobs_released_at_exit() {
     . "$1"
     sleep 60 &
     printf "job:%s\n" "$!"
-    ( trap "" TERM; sleep 60 ) &
+    ( trap "" TERM; exec sleep 60 ) &
     printf "job:%s\n" "$!"
     fail "a case failed before reaping its background jobs"
   ' _ "$LIB" 2>&1)
