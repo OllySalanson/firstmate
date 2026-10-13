@@ -738,6 +738,41 @@ assert_no_grep() {
   ! grep -F -- "$1" "$2" >/dev/null || fail "$3"
 }
 
+# fm_test_assert_brief_off_argv <launch> <harness-bin> <sentinel> <label>
+# Runs a captured launch command (PATH should already reach its fakes) with
+# <harness-bin> replaced by an argv recorder, then asserts the launched
+# process's command line - /proc/<pid>/cmdline where the platform has it, which
+# is what `pkill -f` and `pgrep -f` match - never carries <sentinel>, while the
+# typed launch-brief pointer it does carry names a readable brief that does.
+# bin/fm-spawn.sh's header owns why the brief stays off every command line.
+fm_test_assert_brief_off_argv() {
+  local launch=$1 bin=$2 sentinel=$3 label=$4 capture pointer brief
+  capture="$bin.argv"
+  rm -f -- "$capture"
+  cat > "$bin" <<'SH'
+#!/usr/bin/env bash
+if [ -r "/proc/$$/cmdline" ]; then
+  tr '\0' '\n' < "/proc/$$/cmdline"
+else
+  printf '%s\n' "$0" "$@"
+fi > "$FM_ARGV_CAPTURE"
+SH
+  chmod +x "$bin"
+  FM_ARGV_CAPTURE="$capture" bash -c "$launch" </dev/null >/dev/null 2>&1
+  [ -s "$capture" ] || fail "$label: the launch never ran $bin"
+  assert_no_grep "$sentinel" "$capture" "$label: the brief text reached the agent's command line"
+  pointer=$(grep -m1 'FIRSTMATE_OP: v1 launch-brief:' "$capture" |
+    "$ROOT/bin/fm-operational-input.sh" body) ||
+    fail "$label: the launch carried no typed launch-brief message"
+  case "$pointer" in
+    'Read the brief at '*' and follow it exactly.') ;;
+    *) fail "$label: the launch-brief message is not a brief pointer: $pointer" ;;
+  esac
+  brief=${pointer#Read the brief at }
+  brief=${brief% and follow it exactly.}
+  assert_grep "$sentinel" "$brief" "$label: the brief the launch points at lost the task text"
+}
+
 # assert_absent <path> <msg>: path must not exist.
 assert_absent() {
   [ ! -e "$1" ] || fail "$2"

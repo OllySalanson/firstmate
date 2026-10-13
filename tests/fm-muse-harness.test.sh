@@ -236,7 +236,7 @@ EOF
 # --- spawn ------------------------------------------------------------------
 
 test_spawn_launch_shape() {
-  local rec case_dir home proj wt fakebin id out status launch
+  local rec case_dir home proj wt fakebin id out status launch muse_bin
   rec=$(make_spawn_case launch)
   IFS='|' read -r case_dir home proj wt fakebin id <<EOF
 $rec
@@ -266,9 +266,12 @@ EOF
     "muse launch did not forward its non-secret data root"
   assert_not_contains "$launch" 'META_API_KEY' "muse launch exposed META_API_KEY in worker argv"
   assert_not_contains "$launch" 'test-key' "muse launch exposed the credential value in worker argv"
-  assert_contains "$launch" 'encode launch-brief' "muse launch did not deliver the brief positionally"
+  assert_contains "$launch" 'encode launch-brief' "muse launch did not deliver the brief pointer positionally"
+  muse_bin=$(printf '%s\n' "$launch" | grep -o "'$fakebin/muse[^']*'" | head -1 | tr -d "'")
+  [ -n "$muse_bin" ] || fail "muse launch did not name a resolved muse binary: $launch"
+  PATH="$fakebin:$PATH" fm_test_assert_brief_off_argv "$launch" "$muse_bin" "Exercise Muse dispatch" "muse worker"
   assert_grep 'harness=muse' "$home/state/$id.meta" "muse harness was not recorded in meta"
-  pass "muse spawn launches with autonomy, privacy control, and a positional brief"
+  pass "muse spawn launches with autonomy, privacy control, and a positional brief pointer"
 }
 
 test_spawn_maps_effort_and_model() {

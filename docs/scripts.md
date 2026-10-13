@@ -59,6 +59,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-remote-readiness-lib.sh` | Shared remote second-mate readiness gate: check and, when needed, repair then re-check through `fm-remote-doctor.sh` |
 | [`fm-project-origin-lib.sh`](../bin/fm-project-origin-lib.sh) | Accepted origin-form owner shared by both remote provisioning boundaries |
 | `fm-spawn.sh`            | Spawn crewmates, scouts, `id=repo` batches, and secondmates on the resolved harness and runtime backend, deferring a ship or scout spawn or relaunch the memory gate refuses |
+| `fm-worker-trust-prompt.txt` | The task-worker trust statement `fm-spawn.sh` hands a Claude worker as a system-prompt file, so no instruction text rides the process command line |
 | `fm-memory-watchdog.sh`  | The one watchdog: worker admission against the memory, processor, and connection gates, per-job size ceilings, the critical-line heavy-job stop, the processor and connection throttle, flagship-first dispatch order, the gate status, and the plain-words `history` view (docs/configuration.md "Memory gate") |
 | `fm-memory-lib.sh`       | Memory gate mechanics: meminfo sampling, the gate and reservation records, heavy-job discovery under recorded task worktrees, and the config/memory-gate parser |
 | `fm-load-lib.sh`         | Processor and connection mechanics: pressure, load, and latency sampling, their gates, per-worker processor and traffic attribution, the throttle's pause and priority signals, and the rotating sample history |
