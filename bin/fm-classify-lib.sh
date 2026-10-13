@@ -856,9 +856,12 @@ status_key_closing_verb() {  # <status-file> <key>
   kind=$(_fm_status_kind "$f")
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
   held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
-  candidates=$(grep -E \
-    "^[[:space:]]*(needs-decision|blocked|done|failed|$resolve|$held)[[:space:]:[]" \
-    "$f") || [ "$?" -eq 1 ] || candidates=$(cat "$f")
+  # A stray NUL byte in a status line would make grep treat the log as binary
+  # and the command substitution warn, so both reads drop NULs first, matching
+  # what every `read`-based fold sees.
+  candidates=$(LC_ALL=C tr -d '\000' < "$f" | grep -E \
+    "^[[:space:]]*(needs-decision|blocked|done|failed|$resolve|$held)[[:space:]:[]") \
+    || [ "$?" -eq 1 ] || candidates=$(LC_ALL=C tr -d '\000' < "$f")
   while IFS= read -r line || [ -n "$line" ]; do
     status_line_verb "$line" event
     case "$event:$kind" in
