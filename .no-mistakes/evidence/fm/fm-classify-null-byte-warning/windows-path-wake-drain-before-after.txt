@@ -1,0 +1,31 @@
+===== BEFORE (aacf4ba) =====
+$ brief status command: echo "{state} [at=<epoch>]: {one short line}" >> '/tmp/nul-e2e-before.I8NZOB/e2e/home/state/winpath.status' && { [ ! -e '/tmp/nul-e2e-before.I8NZOB/e2e/home/config/fleet-ledger' ] || '/tmp/fm-wake-tangle-root.B1Lpze/bin/fm-fleet-ledger.sh' appended '/tmp/nul-e2e-before.I8NZOB/e2e/home/config' '/tmp/nul-e2e-before.I8NZOB/e2e/home/state/winpath.status' >/dev/null 2>&1 || true; }
+$ zsh -c <status command>   (worker writes a Windows path)
+$ od -c winpath.status (last line)
+0000000   e   w  \r   e   p   o   r   t   .   t   x   t   ?  \n
+0000016
+$ fm-wake-drain.sh   (stderr shown inline)
+1791868645	1	signal	winpath.status	signal: winpath.status
+/tmp/nultest/base/bin/fm-wake-lib.sh: line 2419: warning: command substitution: ignored null byte in input
+wake annotation: unread wake-EVENT since last drain, not current state: winpath.status: needs-decision [at=1790000000]: save report to C:sers\ollyswork
+wake annotation: latest wake-EVENT observed at drain, not current state: winpath.status: ew eport.txt?
+winpath needs-decision: save report to C:sers\ollyswork
+$ fm-wake-drain.sh (second drain, stderr)
+(no warnings)
+
+===== AFTER (da294fa) =====
+$ brief status command: printf '%s\n' "{state} [at=<epoch>]: {one short line}" >> '/tmp/nul-e2e-after.wEt3qU/e2e/home/state/winpath.status' && { [ ! -e '/tmp/nul-e2e-after.wEt3qU/e2e/home/config/fleet-ledger' ] || '/tmp/fm-wake-tangle-root.xhCgst/bin/fm-fleet-ledger.sh' appended '/tmp/nul-e2e-after.wEt3qU/e2e/home/config' '/tmp/nul-e2e-after.wEt3qU/e2e/home/state/winpath.status' >/dev/null 2>&1 || true; }
+$ zsh -c <status command>   (worker writes a Windows path)
+$ od -c winpath.status (last line)
+0000000   n   e   e   d   s   -   d   e   c   i   s   i   o   n       [
+0000020   a   t   =   1   7   9   0   0   0   0   0   0   0   ]   :    
+0000040   s   a   v   e       r   e   p   o   r   t       t   o       C
+0000060   :   \   U   s   e   r   s   \   o   l   l   y   s   \   0   w
+0000100   o   r   k   \   n   e   w   \   r   e   p   o   r   t   .   t
+0000120   x   t   ?  \n
+$ fm-wake-drain.sh   (stderr shown inline)
+1791868649	1	signal	winpath.status	signal: winpath.status
+wake annotation: latest wake-EVENT observed at drain, not current state: winpath.status: needs-decision [at=1790000000]: save report to C:\Users\ollys\0work\new\report.txt?
+winpath needs-decision: save report to C:\Users\ollys\0work\new\report.txt?
+$ fm-wake-drain.sh (second drain, stderr)
+(no warnings)
