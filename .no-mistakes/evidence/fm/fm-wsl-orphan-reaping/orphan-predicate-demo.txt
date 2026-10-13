@@ -1,0 +1,5 @@
+orphan pid=3567573 ppid=344 (systemd); grandparent=1
+attached pid=3567828 ppid=3567471 (this shell=3567471)
+old predicate (ppid==1) on orphan:   NOT-orphaned
+fm_test_is_orphaned on orphan:       orphaned
+fm_test_is_orphaned on attached:     NOT-orphaned
