@@ -1,0 +1,7 @@
+# New regression test test_launch_keeps_brief_text_off_agent_command_line run against base fm-spawn.sh (aefd119) and fixed fm-spawn.sh (5477e5f)
+===== base
+not ok - claude worker: the brief text reached the agent's command line
+exit=
+===== head
+ok - fm-spawn: every launch carries only a brief pointer, never the brief text, on the agent's command line
+exit=

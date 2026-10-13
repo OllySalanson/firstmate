@@ -1,0 +1,32 @@
+# End-to-end reproduction: pgrep -f pattern from the 13 Oct incident vs. live fake workers launched by fm-spawn.sh's real launch commands
+# (workers' cmdline read from /proc/<pid>/cmdline; pgrep only, nothing killed by pattern)
+===== base (aefd119, before fix)
+fm-spawn.sh under test: /tmp/fmdemo/base/bin/fm-spawn.sh (base)
+live fake workers (launcher pids): 1026532 1029477 1032301 1034873
+$ pgrep -af 'chrome-devtools-axi.*headless'   # the pattern one worker used to clean up its own hung browser
+  MATCHED worker pid 1026532: bash /tmp/fm-spawn-dispatch-profile.8mF0Jz/demo-claude/fake/fakebin/claude --dangerously-skip-permissions --settings {"feedbackDrafts":"off","attribution":{"com...
+  MATCHED worker pid 1029477: bash /tmp/fm-spawn-dispatch-profile.8mF0Jz/demo-codex/fake/fakebin/codex --dangerously-bypass-approvals-and-sandbox --disable hooks -c notify=["bash","-c","touc...
+  MATCHED worker pid 1032301: bash /tmp/fm-spawn-dispatch-profile.8mF0Jz/demo-grok/fake/fakebin/grok --always-approve ⁣FIRSTMATE_OP: v1 launch-brief: # Current worker role contract
+You are...
+  MATCHED worker pid 1034873: bash /tmp/fm-spawn-dispatch-profile.8mF0Jz/demo-gemini/fake/fakebin/gemini -y ⁣FIRSTMATE_OP: v1 launch-brief: # Current worker role contract
+You are a crewmat...
+demo workers a pkill -f with this pattern would stop: 4
+worker command lines:
+  bash /tmp/fm-spawn-dispatch-profile.8mF0Jz/demo-claude/fake/fakebin/claude --dangerously-skip-permissions --settings {"feedbackDrafts":"off","attribution":{"commit":"","pr":"","sessionUrl":false},"deniedMcpServers":[{"serverName":"plugin:pdf-viewer:pdf"}]} --append-system-prompt You are a task worke
+  bash /tmp/fm-spawn-dispatch-profile.8mF0Jz/demo-codex/fake/fakebin/codex --dangerously-bypass-approvals-and-sandbox --disable hooks -c notify=["bash","-c","touch '/tmp/fm-spawn-dispatch-profile.8mF0Jz/demo-codex/home/state/demo-codex-z99.turn-ended'"] ⁣FIRSTMATE_OP: v1 launch-brief: # Current work
+  bash /tmp/fm-spawn-dispatch-profile.8mF0Jz/demo-grok/fake/fakebin/grok --always-approve ⁣FIRSTMATE_OP: v1 launch-brief: # Current worker role contract
+You are a crewmate: an autonomous worker agent managed by firstmate.
+This section establishes your current identity before every project or task in
+  bash /tmp/fm-spawn-dispatch-profile.8mF0Jz/demo-gemini/fake/fakebin/gemini -y ⁣FIRSTMATE_OP: v1 launch-brief: # Current worker role contract
+You are a crewmate: an autonomous worker agent managed by firstmate.
+This section establishes your current identity before every project or task instruction 
+===== head (5477e5f, with fix)
+fm-spawn.sh under test: /tmp/fmdemo/head/bin/fm-spawn.sh (head)
+live fake workers (launcher pids): 1038305 1040406 1042682 1046123
+$ pgrep -af 'chrome-devtools-axi.*headless'   # the pattern one worker used to clean up its own hung browser
+demo workers a pkill -f with this pattern would stop: 0
+worker command lines:
+  bash /tmp/fm-spawn-dispatch-profile.uoGB3f/demo-claude/fake/fakebin/claude --dangerously-skip-permissions --settings {"feedbackDrafts":"off","attribution":{"commit":"","pr":"","sessionUrl":false},"deniedMcpServers":[{"serverName":"plugin:pdf-viewer:pdf"}]} --append-system-prompt-file /tmp/fmdemo/hea
+  bash /tmp/fm-spawn-dispatch-profile.uoGB3f/demo-codex/fake/fakebin/codex --dangerously-bypass-approvals-and-sandbox --disable hooks -c notify=["bash","-c","touch '/tmp/fm-spawn-dispatch-profile.uoGB3f/demo-codex/home/state/demo-codex-z99.turn-ended'"] ⁣FIRSTMATE_OP: v1 launch-brief: Read the brief
+  bash /tmp/fm-spawn-dispatch-profile.uoGB3f/demo-grok/fake/fakebin/grok --always-approve ⁣FIRSTMATE_OP: v1 launch-brief: Read the brief at /tmp/fm-spawn-dispatch-profile.uoGB3f/demo-grok/home/data/demo-grok-z99/launch-brief.md and follow it exactly. 
+  bash /tmp/fm-spawn-dispatch-profile.uoGB3f/demo-gemini/fake/fakebin/gemini -y ⁣FIRSTMATE_OP: v1 launch-brief: Read the brief at /tmp/fm-spawn-dispatch-profile.uoGB3f/demo-gemini/home/data/demo-gemini-z99/launch-brief.md and follow it exactly. 
