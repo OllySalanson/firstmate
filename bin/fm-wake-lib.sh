@@ -2314,7 +2314,8 @@ fm_wake_status_append_self_announced() {  # <state> <status-file> <line>...
   if [ "$classified" != "$pre_size" ]; then
     folded=$(status_open_decisions_cursor_offset "$file") || folded=0
     [ "$folded" = "$pre_size" ] && [ "$classified" -lt "$pre_size" ] || return 1
-    lag=$(_fm_status_read_span "$file" "$classified" "$((pre_size - classified))") || return 1
+    lag=$(set -o pipefail
+      _fm_status_read_span "$file" "$classified" "$((pre_size - classified))" | tr -d '\000') || return 1
     while IFS= read -r line || [ -n "$line" ]; do
       case "$line" in *[![:space:]]*) ;; *) continue ;; esac
       case "$(status_line_verb "$line")" in
@@ -2413,8 +2414,11 @@ fm_wake_unread_events() {  # <validated-status-path> <unused-tail-byte-cap> <min
       my $read = read($file, my $buffer, $remaining);
       exit 1 unless defined $read;
       last unless $read;
-      print $buffer or exit 1;
       $remaining -= $read;
+      # A NUL byte cannot survive the command substitution; drop it here so
+      # bash does not warn. The byte size above stays the raw file offset.
+      $buffer =~ tr/\0//d;
+      print $buffer or exit 1;
     }
   ' "$path" "$min_offset" "$end_offset" 2>/dev/null) || return 1
   size=${result%%$'\t'*}

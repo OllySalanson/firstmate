@@ -123,6 +123,36 @@ test_signal_annotation_surfaces_every_unread_note_not_only_the_newest() {
   pass "a queued status signal annotates every unread note, not only the newest"
 }
 
+# A status line that already holds a NUL byte (an escape-interpreting echo once
+# wrote C:\Users that way) must still surface, without bash warning that the
+# command substitution ignored a null byte on every later drain.
+test_nul_byte_in_status_line_drains_without_warning() {
+  local dir state out err status
+  dir=$(make_case nul-byte)
+  state="$dir/state"
+  out="$dir/drain.out"
+  err="$dir/drain.err"
+  status="$state/task-nul.status"
+  prime_cursor "$state" "$status"
+
+  printf 'needs-decision [at=1790000000]: open C:\000sers\\ollys\000work\n' >> "$status"
+  printf 'note: after the windows path\n' >> "$status"
+  append_wake "$state" signal task-nul.status "signal: task-nul.status" \
+    || fail "queueing the NUL-byte status signal failed"
+
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" 2> "$err" \
+    || fail "drain failed on a status line holding a NUL byte"
+
+  if grep -F 'null byte' "$err" >/dev/null; then
+    fail "the drain warned about a NUL byte in the status log: $(cat "$err")"
+  fi
+  grep -F 'unread wake-EVENT since last drain, not current state: task-nul.status: needs-decision [at=1790000000]: open C:sers\ollyswork' "$out" >/dev/null \
+    || fail "the signal annotation dropped the NUL-byte line: $(cat "$out")"
+  grep -F 'task-nul note: after the windows path' "$out" >/dev/null \
+    || fail "the note after the NUL-byte line was not surfaced: $(cat "$out")"
+  pass "a status line holding a NUL byte drains and surfaces without a null-byte warning"
+}
+
 test_pending_reply_resolution_surfaces_once() {
   local dir state out status
   dir=$(make_case pending-reply-resolution)
@@ -445,6 +475,7 @@ test_incident_note_answer_buried_under_routine_note_surfaces_both
 test_already_presented_notes_are_not_replayed
 test_brand_new_note_after_presentation_is_surfaced
 test_signal_annotation_surfaces_every_unread_note_not_only_the_newest
+test_nul_byte_in_status_line_drains_without_warning
 test_pending_reply_resolution_surfaces_once
 test_self_announced_pending_reply_close_still_surfaces
 test_unread_output_over_cap_remains_recoverable
