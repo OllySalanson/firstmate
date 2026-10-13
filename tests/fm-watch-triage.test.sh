@@ -5660,7 +5660,8 @@ case "$dest" in
     case "${FM_MARKER_MV_MODE:-}" in
       pause)
         printf '1\n' > "$FM_MARKER_MV_READY"
-        while [ ! -e "$FM_MARKER_MV_RELEASE" ]; do sleep 0.02; done
+        deadline=$((SECONDS + FM_TEST_STUB_MAX_BLOCK_SECONDS))
+        while [ ! -e "$FM_MARKER_MV_RELEASE" ] && [ "$SECONDS" -lt "$deadline" ]; do sleep 0.02; done
         ;;
       kill-before) kill -KILL "$PPID"; exit 1 ;;
       kill-after) "$REAL_MV" "$@" || exit; kill -KILL "$PPID"; exit 1 ;;
@@ -5685,8 +5686,8 @@ test_procevent_surface_serializes_with_drain() {
   wait_numeric_file "$ready" "$pid" || fail "the watcher never reached its marker commit boundary"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" &
   drain_pid=$!
-  wait_live "$drain_pid" 10 || fail "a concurrent drain split the surfacing transition"
-  [ -s "$state/.wake-queue" ] || fail "the concurrent drain consumed the record before marker commit"
+  wait_live "$drain_pid" 10 || { touch "$release"; fail "a concurrent drain split the surfacing transition"; }
+  [ -s "$state/.wake-queue" ] || { touch "$release"; fail "the concurrent drain consumed the record before marker commit"; }
   touch "$release"
   wait "$pid" || fail "the paused watcher did not finish surfacing"
   wait "$drain_pid" || fail "the concurrent drain failed after surfacing committed"

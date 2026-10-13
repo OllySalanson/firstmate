@@ -2193,7 +2193,8 @@ SH
 }
 
 test_config_reread_serializes_concurrent_pushes() {
-  local w head fakebin marker entered log first_out second_out first_pid first_status second_status
+  local w head fakebin marker entered release waiting real_sleep log first_out second_out
+  local first_pid second_pid first_status second_status
   local first_instr second_instr first_line second_line
   w=$(new_world config-reread-serialized-pushes)
   head=$(git -C "$w/main" rev-parse HEAD)
@@ -2206,6 +2207,9 @@ test_config_reread_serializes_concurrent_pushes() {
   mv "$fakebin/tmux" "$fakebin/tmux.real"
   marker="$w/first-send.marker"
   entered="$w/first-send.entered"
+  release="$w/first-send.release"
+  waiting="$w/second-push.waiting"
+  real_sleep=$(command -v sleep)
   log="$w/config-reread-serialized.tmux.log"
   cat > "$fakebin/tmux" <<SH
 #!/usr/bin/env bash
@@ -2213,13 +2217,20 @@ case "\$*" in
   *send-keys*)
     if (set -o noclobber; : > "$marker") 2>/dev/null; then
       : > "$entered"
-      sleep 1
+      deadline=\$((SECONDS + FM_TEST_STUB_MAX_BLOCK_SECONDS))
+      while [ ! -e "$release" ] && [ "\$SECONDS" -lt "\$deadline" ]; do "$real_sleep" 0.02; done
     fi
     ;;
 esac
 exec "$fakebin/tmux.real" "\$@"
 SH
   chmod +x "$fakebin/tmux"
+  cat > "$fakebin/sleep" <<SH
+#!/usr/bin/env bash
+[ -z "\${FM_FAKE_LOCK_WAITING:-}" ] || : > "\$FM_FAKE_LOCK_WAITING"
+exec "$real_sleep" "\$@"
+SH
+  chmod +x "$fakebin/sleep"
 
   first_out="$w/first-push.out"
   (
@@ -2228,16 +2239,30 @@ SH
       "$ROOT/bin/fm-config-push.sh" > "$first_out" 2>&1
   ) &
   first_pid=$!
-  fm_wait_for_path "$entered" "$first_pid" \
-    || fail "first config push did not reach pointer delivery: $(cat "$first_out")"
-  first_instr=$(reread_instruction_path "$w/sm") \
-    || fail "first concurrent push did not publish its generation"
+  fm_wait_for_path "$entered" "$first_pid" || {
+    : > "$release"
+    wait "$first_pid" 2>/dev/null || true
+    fail "first config push did not reach pointer delivery: $(cat "$first_out")"
+  }
+  first_instr=$(reread_instruction_path "$w/sm") || {
+    : > "$release"
+    wait "$first_pid" 2>/dev/null || true
+    fail "first concurrent push did not publish its generation"
+  }
   printf 'two\n' > "$w/home/config/crew-harness"
   second_out="$w/second-push.out"
   PATH="$fakebin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" \
-    FM_SEND_SETTLE=0 FM_FAKE_TMUX_LOG="$log" \
-    "$ROOT/bin/fm-config-push.sh" > "$second_out" 2>&1
-  second_status=$?
+    FM_SEND_SETTLE=0 FM_FAKE_TMUX_LOG="$log" FM_FAKE_LOCK_WAITING="$waiting" \
+    "$ROOT/bin/fm-config-push.sh" > "$second_out" 2>&1 &
+  second_pid=$!
+  fm_wait_for_path "$waiting" "$second_pid" || {
+    : > "$release"
+    wait "$second_pid" 2>/dev/null || true
+    wait "$first_pid" 2>/dev/null || true
+    fail "second config push never waited on the first push's lock: $(cat "$second_out")"
+  }
+  : > "$release"
+  wait "$second_pid"; second_status=$?
   wait "$first_pid"; first_status=$?
   expect_code 0 "$first_status" "first serialized config push failed"
   expect_code 0 "$second_status" "second serialized config push failed"

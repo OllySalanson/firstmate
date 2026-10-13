@@ -100,7 +100,8 @@ case "${1:-}" in
         'export GOTMPDIR='*)
           if [ -n "${FM_FAKE_TRACE_PREPARE:-}" ]; then
             : > "$FM_FAKE_TRACE_PREPARE"
-            while [ ! -e "$FM_FAKE_TRACE_RELEASE" ]; do /bin/sleep 0.01; done
+            deadline=$((SECONDS + FM_TEST_STUB_MAX_BLOCK_SECONDS))
+            while [ ! -e "$FM_FAKE_TRACE_RELEASE" ] && [ "$SECONDS" -lt "$deadline" ]; do /bin/sleep 0.01; done
           fi
           ;;
         'export TRACEPARENT='*)
@@ -123,7 +124,8 @@ case "${1:-}" in
         *pane_current_path*)
           if [ -n "${FM_FAKE_CWD_RACE_READY:-}" ]; then
             : > "$FM_FAKE_CWD_RACE_READY"
-            while [ ! -e "$FM_FAKE_CWD_RACE_RELEASE" ]; do /bin/sleep 0.01; done
+            deadline=$((SECONDS + FM_TEST_STUB_MAX_BLOCK_SECONDS))
+            while [ ! -e "$FM_FAKE_CWD_RACE_RELEASE" ] && [ "$SECONDS" -lt "$deadline" ]; do /bin/sleep 0.01; done
           fi
           cat "$D/cwd"; printf '\n'; exit 0 ;;
       esac
@@ -401,7 +403,8 @@ if [ -n "${FM_FAKE_META_WRITER_TARGET:-}" ] \
    && [ "$target_path" = "$FM_FAKE_META_WRITER_TARGET" ] \
    && grep -q '^x_request=' "$source_path" 2>/dev/null; then
   : > "$FM_FAKE_META_WRITER_READY"
-  while [ ! -e "$FM_FAKE_META_WRITER_RELEASE" ]; do /bin/sleep 0.01; done
+  deadline=$((SECONDS + FM_TEST_STUB_MAX_BLOCK_SECONDS))
+  while [ ! -e "$FM_FAKE_META_WRITER_RELEASE" ] && [ "$SECONDS" -lt "$deadline" ]; do /bin/sleep 0.01; done
 fi
 exec "$FM_REAL_MV" "$@"
 SH
