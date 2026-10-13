@@ -31,9 +31,15 @@
 # also hold the result of a passed run. These live reads are the one check at the ready
 # decision; a later rebase or patch set on the server does not revoke an armed
 # task's done. Teardown's landed-work test remains the complete discard gate.
-# fm_dod_block <no-mistakes|direct-PR|local-only> <task-id> [<forge>] prints the
-# block on stdout with no trailing blank line. The caller validates the mode; an
-# unknown mode is refused rather than silently rendered as the pipeline contract.
+# fm_dod_block <no-mistakes|direct-PR|local-only> <task-id> [<forge>]
+# [<checks-gate>] prints the block on stdout with no trailing blank line. The
+# caller validates the mode; an unknown mode is refused rather than silently
+# rendered as the pipeline contract. checks-gate is the home's
+# fm_checks_gate_read answer (forge, the default, or local); under local a
+# no-mistakes run skips its ci step and a direct-PR worker runs the project's
+# checks before pushing, while the ready report keeps its shape so every
+# consumer below reads it unchanged. gerrit and local-only already wait on no
+# forge CI and render the same under either gate.
 # The block opens with the fixed machine-readable "Delivery contract: mode=<mode>"
 # line that bin/fm-spawn.sh checks a ship brief against; a forge=gerrit block
 # appends " forge=gerrit shape=squash" to that line.
@@ -322,11 +328,12 @@ EOF
 
 # The forge-independent middle of the no-mistakes contract: how a worker drives
 # the pipeline, what `--intent` may carry, and the two firstmate-specific rules.
-# Written once; only the two sentences about a green PR depend on the forge,
-# because on gerrit the ci step is skipped and there is no PR to report.
-fm_nm_driving_block() {  # <forge>
+# Written once; only the two sentences about a green PR depend on the forge and
+# the checks gate, because on gerrit or under the local gate the ci step is
+# skipped and the run ends with an outcome rather than a CI-ready return.
+fm_nm_driving_block() {  # <forge> [<checks-gate>]
   local pr_return_line='' pr_reattach_clause=';'
-  if [ "$1" != gerrit ]; then
+  if [ "$1" != gerrit ] && [ "${2:-forge}" != local ]; then
     pr_return_line="Only a drive call's return reports the green PR: \`no-mistakes axi status\` shows progress but never reports \`checks-passed\` while the ci step is still monitoring the PR for merge, so never wait on a status poll for the next gate or outcome.
 "
     pr_reattach_clause="; once checks are green it returns \`checks-passed\` immediately, and"
@@ -382,9 +389,15 @@ There is no pull request, no \`gh-axi\` call, and no forge CI result to report: 
 EOF
 }
 
-fm_dod_block() {  # <mode> <task-id> [<forge>]
-  local mode=$1 id=$2 forge=${3:-none}
+fm_dod_block() {  # <mode> <task-id> [<forge>] [<checks-gate>]
+  local mode=$1 id=$2 forge=${3:-none} gate=${4:-forge}
   fm_forge_valid_for_mode "$forge" "$mode" fm_dod_block || return 1
+  case "$gate" in
+    forge|local) ;;
+    *)
+      echo "error: fm_dod_block: unknown checks gate '$gate' (expected forge or local)" >&2
+      return 1 ;;
+  esac
   case "$mode:$forge" in
     direct-PR:gerrit)
       cat <<EOF
@@ -437,6 +450,9 @@ EOF
 Delivery contract: mode=direct-PR
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 The task is complete only when committed on your branch.
+EOF
+      [ "$gate" != local ] || fm_dod_local_gate_direct_block
+      cat <<EOF
 When it is implemented and committed, push your branch and open a PR with \`gh-axi\` that is ready for review, not a draft.
 Before you report done, read the PR back from the forge and confirm it is not a draft (\`gh pr view <url> --json isDraft\` must print false); if it is a draft, mark it ready with \`gh-axi pr ready\`.
 A draft cannot be merged, so a done report on one leaves the merge unasked.
@@ -462,18 +478,30 @@ EOF
       cat <<EOF
 # Definition of done
 Delivery contract: mode=no-mistakes
+EOF
+      [ "$gate" != local ] || cat <<EOF
+This home's checks gate is local: the pipeline's own review, test, document, and lint steps on this machine are the checks, and forge CI is never awaited.
+Pass \`--skip ci\` on every \`no-mistakes axi run\` for this task, and skip nothing else.
+EOF
+      cat <<EOF
 The task is complete only when committed on your branch.
 When you believe it is complete, append \`done [at=<epoch>]: {summary}\` to the status file and stop.
 Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
 That first \`done:\` is the handoff that starts the pipeline, which owns the push; it is not a request to push from this copy.
 
 EOF
-      fm_nm_driving_block "$forge"
+      fm_nm_driving_block "$forge" "$gate"
+      local ready_when="After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge)"
+      local finished="You are finished."
+      if [ "$gate" = local ]; then
+        ready_when="When the run's outcome is passed, passed-with-skips, or passed-with-override, it has pushed your branch and opened the PR without waiting on forge CI"
+        finished="You are finished: under the local gate, checks green means the run's local checks passed, whatever forge CI later reports."
+      fi
       cat <<EOF
 
-After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), read the PR back from the forge and confirm it is not a draft (\`gh pr view <url> --json isDraft\` must print false); if it is a draft, mark it ready with \`gh-axi pr ready\`.
+${ready_when}; read the PR back from the forge and confirm it is not a draft (\`gh pr view <url> --json isDraft\` must print false); if it is a draft, mark it ready with \`gh-axi pr ready\`.
 A draft cannot be merged, so a done report on one leaves the merge unasked.
-Then append \`done [at=<epoch>]: PR {url} checks green\` and stop. You are finished.
+Then append \`done [at=<epoch>]: PR {url} checks green\` and stop. ${finished}
 That CI-ready \`done:\` is accepted only when this copy's HEAD - your latest commit - is one the /no-mistakes run pushed, so commit nothing after the run; the check tests that commit, not merely that a branch moved.
 If you deliberately keep the PR a draft, append \`paused [at=<epoch>]: {why the draft is held}\` instead of done.
 EOF
@@ -482,6 +510,18 @@ EOF
       echo "error: fm_dod_block: unknown delivery mode '$mode'" >&2
       return 1 ;;
   esac
+}
+
+# The direct-PR addition under the local checks gate: the worker's own run of
+# the project's checks is what makes the PR ready, since the merge no longer
+# waits on forge CI.
+fm_dod_local_gate_direct_block() {
+  cat <<'EOF'
+This home's checks gate is local: the project's own checks run on this machine are what make the PR ready, and forge CI is never awaited.
+Before you push, run every check the project defines - lint, typecheck, tests, and build, as its AGENTS.md, CONTRIBUTING.md, README, or task manifest names them - and push only when all of them pass; a failing local check is not done, so fix it or report it blocked.
+Name the checks you ran and their results in the PR description.
+Do not wait on, re-run, or report forge CI; its results are advisory.
+EOF
 }
 
 # 0 when <sha> is contained in a ref under <namespace> in <repo>.

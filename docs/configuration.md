@@ -245,6 +245,23 @@ The [`firstmate-coding-guidelines` skill](../.agents/skills/firstmate-coding-gui
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for the firstmate-specific local test policy and entry points.
 Portable shard evidence and coverage rules are in [fm-test-portable-shards.md](fm-test-portable-shards.md); [herdr-backend.md](herdr-backend.md#destructive-lab-safety) owns the real-Herdr lane's isolation boundary, and [runtime-backends.md](verification/runtime-backends.md#herdr) owns active evidence.
 
+## Checks gate (config/checks-gate)
+
+The optional local, gitignored `config/checks-gate` chooses which checks gate a landing from this home: `forge` or `local`, as the file's whitespace-trimmed content.
+`forge` is the default when the file is absent, and keeps today's behavior: a no-mistakes ship waits for forge CI, and a GitHub merge requires every check green at the live head.
+`local` makes checks run on this machine the gate, so absent, queued, or failing forge checks never hold a landing and the forge only stores the code.
+Under `local`, the [`bin/fm-dod-lib.sh`](../bin/fm-dod-lib.sh) Definition of done has a no-mistakes worker pass `--skip ci` so the pipeline's own review, test, document, and lint steps are the checks, and has a direct-PR worker run the project's own lint, typecheck, test, and build commands before pushing.
+The ready report keeps its shape, and `checks green` in it then means the local checks passed.
+[`bin/fm-crew-state.sh`](../bin/fm-crew-state.sh) reads a monitoring or failed forge CI step as ready when every local step completed, while a CI step that is fixing code stays in progress.
+[`bin/fm-pr-merge.sh`](../bin/fm-pr-merge.sh) lists forge checks on a GitHub pull request as advisory notes instead of refusing on them, and instead binds the merge to the head recorded when the ready report was armed through `bin/fm-pr-check.sh`, the head the local checks vouched for: a later push, or an absent recorded head, refuses until the new head is validated and armed again.
+Every other merge condition, the merge-head binding, captain holds, and merge authority are unchanged, and `--allow-red` is never needed.
+GitLab merge requests keep their head-pipeline requirement, and Gerrit and local-only delivery wait on no forge CI under either setting.
+The contribution observer behind Bearings counts forge check lanes but stops naming them as the reason a delivery waits.
+Any other value, or an unreadable file, refuses brief generation, scout promotion, and every GitHub merge from that home, while current-state and contribution reads fall back to `forge`.
+Each script reads the file on every run, so a change takes effect without a restart; a brief already written keeps the gate it was written under.
+The setting is inherited into secondmate homes under the [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md) inherited-local-material contract, so every home lands under the same gate.
+Forge-side settings stay the repository owner's: a branch protection rule that requires a check still blocks the forge's own merge command, so turning this on pairs with removing such required checks rather than waiting on them.
+
 ## Captain Preferences (data/captain.md / data/captain-shared.md)
 
 Domain-local preferences for one captain's fleet live locally in each home's `data/captain.md`; it is gitignored and printed in the session-start context digest after `data/projects.md` and optional `data/secondmates.md`.

@@ -41,9 +41,13 @@ def projected($input; $saved; $now; $max_age):
          (.id == $k.task or ((.links // []) | index($k.url)) != null))
          | select(.hold_bucket == "live")] | first) as $hold
     | ([$input.tasks[]? | select(.id == $k.task and .pr.url == $k.url)
-       | {head:(.pr.head | select(. != null and . != "")), merge_authority:(.merge_authority // "unknown")}] | first) as $task
+       | {head:(.pr.head | select(. != null and . != "")), merge_authority:(.merge_authority // "unknown"),
+          checks_gate:(.checks_gate // "forge")}] | first) as $task
     | ($task.head // null) as $recorded_head
     | ($task.merge_authority // "unknown") as $merge_authority
+    # Under the home's local checks gate forge check lanes are advisory: still
+    # counted below, never the reason a delivery waits.
+    | (($task.checks_gate // "forge") == "local") as $local_gate
     | ($record.observation // {}) as $o
     | (if $record.error == null and $record.observation != null and ($o.head | sha) then $o.head else null end) as $observed_head
     | (($record.checked_at // "") | try fromdateiso8601 catch null) as $checked
@@ -78,11 +82,11 @@ def projected($input; $saved; $now; $max_age):
          else {actor:"maintainer",reason:"awaiting issue triage"} end
        elif $o.draft then {actor:"fleet",reason:"draft delivery"}
        elif $o.mergeable != "mergeable" then {actor:"fleet",reason:("mergeability " + ($o.mergeable // "unknown"))}
-       elif ($failed | length) > 0 then {actor:"fleet",reason:"checks failed"}
-       elif ($no_verdict | length) > 0 or (($o.absent_checks // []) | length) > 0 then
+       elif ($local_gate | not) and ($failed | length) > 0 then {actor:"fleet",reason:"checks failed"}
+       elif ($local_gate | not) and (($no_verdict | length) > 0 or (($o.absent_checks // []) | length) > 0) then
          {actor:"fleet",reason:"check lane has no verdict"}
-       elif ($checks | length) == 0 then {actor:"fleet",reason:"no reported checks; readiness unconfirmed"}
-       elif ($pending | length) > 0 then {actor:"fleet",reason:"checks still running"}
+       elif ($local_gate | not) and ($checks | length) == 0 then {actor:"fleet",reason:"no reported checks; readiness unconfirmed"}
+       elif ($local_gate | not) and ($pending | length) > 0 then {actor:"fleet",reason:"checks still running"}
        elif $o.review_decision == "CHANGES_REQUESTED" then {actor:"fleet",reason:"forge requests changes"}
        elif $verdict != null and $verdict.actor == "fleet" then {actor:"fleet",reason:$verdict.summary}
        elif $verdict != null and $verdict.actor == "captain" then

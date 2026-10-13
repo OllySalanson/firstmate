@@ -15,6 +15,11 @@
 # is open, not a draft, mergeable, free of conflicts, and every unwaived check
 # is green at the exact current head commit, where github_checks_not_green below
 # owns what makes a check green and judges each one by its current run.
+# A home whose config/checks-gate says local (docs/configuration.md "Checks
+# gate" owns the setting) replaces that check condition on GitHub: forge checks
+# are listed as advisory notes and never refuse, and the live head must instead
+# equal the pr_head= recorded at the ready report, the head the local checks
+# vouched for; an absent recorded head refuses. An unreadable setting refuses.
 # Every failing condition is reported, not
 # just the first. The verified head is then passed to gh as
 # --match-head-commit, so a push that lands between that read and the merge
@@ -393,10 +398,21 @@ if [ "$PROVIDER" = github ]; then
   fi
 fi
 
+# Which checks gate a GitHub merge, read before anything is recorded; an
+# unreadable or unknown setting refuses rather than picking a gate.
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+CHECKS_GATE=forge
+if [ "$PROVIDER" = github ] && ! CHECKS_GATE=$(fm_checks_gate_read "$CONFIG"); then
+  echo "error: refusing to merge $URL: the checks gate setting could not be read; nothing was merged" >&2
+  exit 1
+fi
+
 # The recorded head is read before bin/fm-pr-check.sh rewrites the metadata,
 # because that script re-records pr= and drops a pr_head= it cannot resolve.
+# Under the local checks gate it is the head the ready report's local checks
+# vouched for, so a GitHub merge binds to it as well.
 RECORDED_HEAD=
-if [ "$PROVIDER" = gitlab ]; then
+if [ "$PROVIDER" = gitlab ] || [ "$CHECKS_GATE" = local ]; then
   RECORDED_HEAD=$(grep '^pr_head=' "$META" | tail -1 | cut -d= -f2- || true)
 fi
 
@@ -632,7 +648,24 @@ FIELDS
     echo "error: could not read the GitHub pull request head commit before merging" >&2
     return 1
   fi
-  if ! red=$(github_checks_not_green "$json"); then
+  if [ "$CHECKS_GATE" = local ]; then
+    # Forge checks are advisory here: listed, never a refusal, and an
+    # unreadable rollup is not a failed read.
+    red=$(github_checks_not_green "$json") || red=''
+    while IFS= read -r name; do
+      [ -z "$name" ] || printf "note: forge check '%s' is not green; advisory only under the local checks gate\n" "$name" >&2
+    done <<EOF
+$red
+EOF
+    red=''
+    if [ -z "$RECORDED_HEAD" ]; then
+      refusals="$refusals  - no locally validated head is recorded for this task (pr_head=); arm the ready report with bin/fm-pr-check.sh first
+"
+    elif [ "$RECORDED_HEAD" != "$live_head" ]; then
+      refusals="$refusals  - head $live_head is not the locally validated head $RECORDED_HEAD recorded at the ready report; the newer commits have not passed local checks
+"
+    fi
+  elif ! red=$(github_checks_not_green "$json"); then
     echo "error: could not read the GitHub pull request state before merging" >&2
     return 1
   fi
@@ -678,8 +711,13 @@ EOF
     [ -z "$uncovered" ] || printf 'error: these checks are not green: %s\n' "$uncovered" >&2
     return 1
   fi
-  printf 'verified: %s is open and mergeable, with every required check green at head %s\n' \
-    "$URL" "$live_head" >&2
+  if [ "$CHECKS_GATE" = local ]; then
+    printf 'verified: %s is open and mergeable at the locally validated head %s; forge checks are advisory under the local checks gate\n' \
+      "$URL" "$live_head" >&2
+  else
+    printf 'verified: %s is open and mergeable, with every required check green at head %s\n' \
+      "$URL" "$live_head" >&2
+  fi
   FM_PR_MERGE_HEAD=$live_head
   FM_PR_GITHUB_BASE=$base
 }

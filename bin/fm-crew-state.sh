@@ -113,7 +113,13 @@
 #      checks green, also reads done (held-for-merge), never failed: a monitor
 #      whose only remaining job is to observe a human merge decision must not
 #      convert the absence of that decision into a failure verdict
-#      (nm_failed_run_is_green_held_ci; 2026-09-05 jr-voice incident). In the
+#      (nm_failed_run_is_green_held_ci; 2026-09-05 jr-voice incident). Under
+#      a home whose config/checks-gate says local (docs/configuration.md
+#      "Checks gate"), both of those ci readings skip the forge's checks
+#      (nm_gated_ci_checks_state): the completed local steps are the checks,
+#      so a monitoring ci step, or a failed run whose only failure is ci,
+#      reads done whatever forge CI reports, while a fixing ci step stays
+#      working. In the
 #      coarse runs-ledger fallback (no steps table, no ci log), a terminal
 #      FAILED record whose daemon an explicit probe proves down reads unknown,
 #      never failed: an instrument failure must not read as work failure
@@ -177,6 +183,10 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
+
+# This home's checks gate (fm_checks_gate_read). An unreadable setting reads as
+# the forge gate, which never reports a run readier than its forge checks.
+CHECKS_GATE=$(fm_checks_gate_read "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}") || CHECKS_GATE=forge
 
 ID=${1:-}
 [ -n "$ID" ] || { echo "usage: fm-crew-state.sh <id>" >&2; exit 2; }
@@ -741,7 +751,7 @@ nm_failed_run_is_green_held_ci() {
 $rows
 EOF
   [ "$saw_ci_failed" = 1 ] || return 1
-  [ "$(nm_ci_checks_state)" = green ]
+  [ "$(nm_gated_ci_checks_state)" = green ]
 }
 
 # Reclassify a terminal failed run as done (held-for-merge) when
@@ -751,6 +761,7 @@ nm_reclassify_failed_run_as_held_green() {
   nm_failed_run_is_green_held_ci || return 1
   RUN_STATE="done"
   RUN_DETAIL="checks green: PR held for merge (ci monitor ended)"
+  [ "$CHECKS_GATE" != local ] || RUN_DETAIL="local $RUN_DETAIL"
   local pr_url
   pr_url=$(strip_quotes "$(nm_field pr)")
   [ -n "$pr_url" ] && RUN_DETAIL="$RUN_DETAIL: $pr_url"
@@ -860,6 +871,19 @@ nm_ci_checks_state() {
     *"no CI checks reported yet"*|*"checks failed"*|*"issues detected"*|*"CI checks running"*) printf 'not-ready' ;;
     *) printf 'unknown' ;;
   esac
+}
+
+# The ci step's readiness under this home's checks gate. Under the forge gate
+# it is nm_ci_checks_state. Under the local gate forge CI is advisory, so the
+# pipeline's completed local steps are the checks and the ci step reads green
+# without consulting the forge; a ci step that is fixing is still not ready,
+# because every caller tests that before asking here.
+nm_gated_ci_checks_state() {
+  if [ "$CHECKS_GATE" = local ]; then
+    printf 'green'
+    return
+  fi
+  nm_ci_checks_state
 }
 # Coarse fallback when the bare `axi status` answer is not this branch's own
 # matching run: either it names another branch (routine once several crews
@@ -1118,10 +1142,11 @@ if [ "$HAVE_RUN" = 1 ]; then
         CI_STEP_STATUS=$(nm_effective_ci_step_status)
         case "$CI_STEP_STATUS" in
           running)
-            CI_LOG_STATE=$(nm_ci_checks_state)
+            CI_LOG_STATE=$(nm_gated_ci_checks_state)
             if [ "$CI_LOG_STATE" = green ]; then
               RUN_STATE="done"
               RUN_DETAIL="checks green: PR ready for review (still monitoring for merge/close)"
+              [ "$CHECKS_GATE" != local ] || RUN_DETAIL="local checks green: PR ready for review (forge CI advisory)"
               # The run's own PR URL makes this reading actionable even when
               # the worker never reported it and no pr= was recorded.
               ci_pr_url=$(strip_quotes "$(nm_field pr)")
@@ -1144,7 +1169,7 @@ if [ "$HAVE_RUN" = 1 ]; then
     if [ "$RUN_STATUS" = fixing ]; then
       CI_LOG_STATE=not-ready
     elif [ "$CI_STEP_STATUS" = running ] && [ -z "$CI_LOG_STATE" ]; then
-      CI_LOG_STATE=$(nm_ci_checks_state)
+      CI_LOG_STATE=$(nm_gated_ci_checks_state)
     elif [ "$CI_STEP_STATUS" = fixing ]; then
       CI_LOG_STATE=not-ready
     fi
