@@ -289,6 +289,10 @@
       "audience": "public-product"
     },
     {
+      "path": "bin/fm-worker-trust-prompt.txt",
+      "audience": "agent-runtime"
+    },
+    {
       "path": "docs/agent-control.md",
       "audience": "maintainer-architecture"
     },
