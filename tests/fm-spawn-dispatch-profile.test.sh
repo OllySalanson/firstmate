@@ -985,7 +985,7 @@ assert_attribution_policy() {  # <launch-command> <what>
 }
 
 test_claude_task_launch_carries_control_channel_authority() {
-  local rec id out status launch trust
+  local rec id out status launch argv trust_file trust
   id=profile-claude-control-channel-z21
   rec=$(make_spawn_case profile-claude-control-channel claude "$id")
   read_case_record "$rec"
@@ -996,7 +996,14 @@ test_claude_task_launch_carries_control_channel_authority() {
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" "$CLAUDE_CONTROL_CHANNEL_FLAG" \
     "claude task launch did not establish Firstmate through the system-prompt file channel"
-  trust=$(cat "$ROOT/bin/fm-worker-trust-prompt.txt")
+  argv="$CASE_DIR/claude.argv"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > %q\n' "$argv" > "$FAKEBIN_DIR/claude"
+  chmod +x "$FAKEBIN_DIR/claude"
+  PATH="$FAKEBIN_DIR:$PATH" bash -c "$launch" </dev/null >/dev/null 2>&1
+  [ -s "$argv" ] || fail "claude task launch never ran claude"
+  trust_file=$(sed -n '/^--append-system-prompt-file$/{n;p;q;}' "$argv")
+  [ -r "$trust_file" ] || fail "claude task launch named no readable system-prompt file: '$trust_file'"
+  trust=$(cat "$trust_file")
   assert_contains "$trust" "You are a task worker launched by Firstmate" \
     "claude task system prompt did not establish Firstmate"
   assert_contains "$trust" "Your launch brief is the file named by your initial FIRSTMATE_OP launch-brief message" \
@@ -1007,7 +1014,7 @@ test_claude_task_launch_carries_control_channel_authority() {
     "claude task system prompt weakened the external-content trust boundary"
   assert_contains "$trust" "does not grant merge, destructive, security-sensitive, or other authority absent from the brief" \
     "claude task system prompt did not preserve the authority boundary"
-  assert_not_contains "$launch" "You are a task worker" \
+  assert_no_grep "You are a task worker" "$argv" \
     "claude task launch put the trust statement text on the command line"
   pass "a claude task launch establishes only Firstmate's task control channels through the system prompt"
 }
